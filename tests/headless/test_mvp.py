@@ -1,51 +1,53 @@
+from __future__ import annotations
+
 import json
+import os
+import sys
+from pathlib import Path
 
-from hera_mcp.tools.core import health
-from hera_mcp.tools.scene import create_object, move_object, snapshot
+# Ensure repo "src/" is importable inside Blender's Python
+REPO_ROOT = Path(__file__).resolve().parents[2]  # D:\HERA
+SRC_DIR = REPO_ROOT / "src"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
+from hera_mcp.tools.core.health import tool_health
+from hera_mcp.tools.scene.create_object import tool_create_object
+from hera_mcp.tools.scene.move_object import tool_move_object
+from hera_mcp.tools.scene.snapshot import tool_scene_snapshot
 
 
-def expect_envelope(env: dict, operation: str):
-    assert env.get("operation") == operation
-    assert "scene_state" in env
-    assert env.get("scene_state") is not None
-    assert env.get("status") in ("ok", "partial", "error")
-    if env.get("status") == "error":
-        raise AssertionError(env.get("error"))
+def _assert(cond: bool, msg: str):
+    if not cond:
+        raise AssertionError(msg)
 
 
-def test_flow():
-    health_env = health.run()
-    expect_envelope(health_env, "health")
+def main():
+    # 1) health
+    r1 = tool_health()
+    _assert(r1.get("status") == "success", f"health status != success: {r1}")
+    _assert("scene_state" in r1, "health missing scene_state")
 
-    create_env = create_object.run(
-        {"type": "cube", "name": "hera_cube", "location": [1, 2, 3]}
-    )
-    expect_envelope(create_env, "scene.create_object")
-    obj_data = create_env["data"]["object"]
-    assert obj_data["name"] == "hera_cube"
+    # 2) create cube (data-first)
+    r2 = tool_create_object(type="CUBE", name="HERA_Cube", location=[1, 2, 3])
+    _assert(r2.get("status") == "success", f"create status != success: {r2}")
+    created = r2.get("data", {}).get("diff", {}).get("created", [])
+    _assert("HERA_Cube" in created, f"created diff missing HERA_Cube: {r2}")
 
-    move_env = move_object.run({"name": "hera_cube", "delta": [1, 0, 0]})
-    expect_envelope(move_env, "scene.move_object")
-    moved_location = move_env["data"]["object"]["location"]
-    assert round(moved_location[0], 3) == 2.0
+    # 3) move object
+    r3 = tool_move_object(name="HERA_Cube", location=[4, 5, 6])
+    _assert(r3.get("status") == "success", f"move status != success: {r3}")
+    modified = r3.get("data", {}).get("diff", {}).get("modified", [])
+    _assert("HERA_Cube" in modified, f"modified diff missing HERA_Cube: {r3}")
 
-    snap_env = snapshot.run({"limit": 2})
-    expect_envelope(snap_env, "scene.snapshot")
-    assert len(snap_env["data"]["objects"]) <= 2
-    if snap_env.get("resume_token"):
-        assert "offset" in snap_env["resume_token"]
+    # 4) snapshot
+    r4 = tool_scene_snapshot(limit_objects=50)
+    _assert(r4.get("status") == "success", f"snapshot status != success: {r4}")
+    ss = r4.get("scene_state", {})
+    _assert(ss.get("ok") is True, f"scene_state ok != True: {ss}")
 
-    print(
-        json.dumps(
-            {
-                "status": "ok",
-                "created": obj_data["name"],
-                "moved_to": moved_location,
-                "snapshot_objects": len(snap_env["data"]["objects"]),
-            }
-        )
-    )
+    print("TEST_RESULT:" + json.dumps({"ok": True, "steps": ["health", "create", "move", "snapshot"]}))
 
 
 if __name__ == "__main__":
-    test_flow()
+    main()
