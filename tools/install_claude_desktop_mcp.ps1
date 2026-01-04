@@ -4,24 +4,23 @@ try {
     $appData = $env:APPDATA
     $localAppData = $env:LOCALAPPDATA
 
-    $candidates = @(
-        Join-Path $appData "Claude\claude_desktop_config.json",
-        Join-Path $localAppData "AnthropicClaude\claude_desktop_config.json"
-    )
+    $path1 = Join-Path -Path $appData -ChildPath "Claude\claude_desktop_config.json"
+    $path2 = Join-Path -Path $localAppData -ChildPath "AnthropicClaude\claude_desktop_config.json"
+    $candidates = @($path1, $path2)
 
     $configPath = $null
     foreach ($c in $candidates) {
-        if (Test-Path $c) {
+        if ($c -and (Test-Path $c)) {
             $configPath = $c
             break
         }
     }
 
     if (-not $configPath) {
-        $configPath = $candidates[0]
+        $configPath = $path1
         $configDir = Split-Path -Parent $configPath
         if (-not (Test-Path $configDir)) {
-            New-Item -ItemType Directory -Path $configDir | Out-Null
+            New-Item -ItemType Directory -Path $configDir -Force | Out-Null
         }
     }
 
@@ -29,23 +28,31 @@ try {
     if (Test-Path $configPath) {
         $jsonText = Get-Content -Path $configPath -Raw -Encoding UTF8
         if ($jsonText.Trim().Length -gt 0) {
-            $config = $jsonText | ConvertFrom-Json -ErrorAction SilentlyContinue
+            try {
+                $parsed = $jsonText | ConvertFrom-Json -ErrorAction Stop
+                if ($parsed) { $config = $parsed }
+            }
+            catch {
+                # ignore invalid JSON, keep empty config
+            }
         }
     }
-    if (-not $config) { $config = @{} }
 
-    if (-not $config.ContainsKey("mcpServers")) {
-        $config["mcpServers"] = @{}
+    if (-not $config) { $config = @{} }
+    if (-not ($config.PSObject.Properties.Name -contains "mcpServers")) {
+        $config.mcpServers = @{}
+    } elseif (-not ($config.mcpServers -is [System.Collections.IDictionary])) {
+        $config.mcpServers = @{}
     }
 
-    $config["mcpServers"]["hera-blender"] = @{
+    $config.mcpServers["hera-blender"] = @{
         command = "powershell"
         args    = @("-ExecutionPolicy","Bypass","-File","D:\HERA\tools\hera-stdio.ps1")
         env     = @{}
     }
 
     $configJson = $config | ConvertTo-Json -Depth 10 -Compress:$false
-    [System.IO.File]::WriteAllText($configPath, $configJson, [System.Text.Encoding]::UTF8)
+    [System.IO.File]::WriteAllText($configPath, $configJson, New-Object System.Text.UTF8Encoding($false))
 
     [Console]::Error.WriteLine("Updated Claude Desktop MCP config at $configPath with server 'hera-blender'.")
     exit 0
