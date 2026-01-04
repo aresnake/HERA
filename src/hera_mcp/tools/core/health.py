@@ -1,7 +1,3 @@
-"""
-Healthcheck tool.
-"""
-
 from __future__ import annotations
 
 from typing import Any, Dict
@@ -11,25 +7,37 @@ from hera_mcp.core.safe_exec import safe_execute
 
 
 def _scene_state_provider() -> Dict[str, Any]:
-    return scene_state.snapshot().get("scene_state", {})
+    snap = scene_state.snapshot()
+    ss = snap.get("scene_state") or {}
+    return {**ss, "ok": True}
 
 
 def run(params: Dict[str, Any] | None = None) -> Dict[str, Any]:
     """
-    Returns a lightweight health envelope with a scene snapshot.
+    Health check envelope; always includes scene_state.
     """
     params = params or {}
 
     def _op():
         snap = scene_state.snapshot(
-            offset=params.get("offset", 0),
-            limit=params.get("limit", 100),
+            offset=int(params.get("offset") or 0),
+            limit=int(params.get("limit") or 25),
         )
+        ss = snap.get("scene_state") or {}
+        ss = {**ss, "ok": True}
         return {
-            "data": {"status": "ready", "blender": "headless"},
-            "scene_state": snap.get("scene_state"),
+            "status": "success",
+            "data": {"ok": True, "diff": {"created": [], "modified": [], "deleted": []}},
+            "scene_state": ss,
             "resume_token": snap.get("resume_token"),
             "next_actions": snap.get("next_actions"),
         }
 
-    return safe_execute("health", _op, _scene_state_provider)
+    return safe_execute("hera.health", _op, _scene_state_provider)
+
+
+def tool_health() -> Dict[str, Any]:
+    """
+    Stable public wrapper for Blender tests.
+    """
+    return run()

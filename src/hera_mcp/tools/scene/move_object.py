@@ -49,14 +49,30 @@ def run(params: Dict[str, Any] | None = None) -> Dict[str, Any]:
                 float(obj.location.y) + delta[1],
                 float(obj.location.z) + delta[2],
             )
-        diff = envelope.build_diff(modified=[{"name": obj.name, "location": list(obj.location)}])
+        diff = {"created": [], "modified": [obj.name], "deleted": []}
         snap = scene_state.snapshot()
         return {
-            "data": {"object": {"name": obj.name, "location": list(obj.location)}},
-            "data_diff": diff,
-            "scene_state": snap.get("scene_state"),
+            "status": "success",
+            "data": {"object": {"name": obj.name, "location": list(obj.location)}, "diff": diff},
+            "scene_state": {**(snap.get("scene_state") or {}), "ok": True},
             "resume_token": snap.get("resume_token"),
             "next_actions": snap.get("next_actions"),
         }
 
     return mono_queue.run(lambda: safe_execute("scene.move_object", _op, _scene_state_provider))
+
+
+def tool_move_object(
+    name: str,
+    location=None,
+    delta=None,
+) -> Dict[str, Any]:
+    """
+    Stable public wrapper for Blender tests.
+    """
+    params: Dict[str, Any] = {"name": name}
+    if location is not None:
+        params["location"] = location
+    if delta is not None:
+        params["delta"] = delta
+    return run(params)

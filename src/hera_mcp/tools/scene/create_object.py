@@ -116,14 +116,37 @@ def run(params: Dict[str, Any] | None = None) -> Dict[str, Any]:
         obj = creator(bpy_module, name, location) if kind != "light" else creator(bpy_module, name, location, light_type)
         if scene and scene.collection:
             scene.collection.objects.link(obj)
-        diff = envelope.build_diff(created=[{"name": obj.name, "type": obj.type}])
+        diff = {"created": [obj.name], "modified": [], "deleted": []}
         snap = scene_state.snapshot()
         return {
-            "data": {"object": {"name": obj.name, "type": obj.type, "location": list(obj.location)}},
-            "data_diff": diff,
-            "scene_state": snap.get("scene_state"),
+            "status": "success",
+            "data": {
+                "object": {"name": obj.name, "type": obj.type, "location": list(obj.location)},
+                "diff": diff,
+            },
+            "scene_state": {**(snap.get("scene_state") or {}), "ok": True},
             "resume_token": snap.get("resume_token"),
             "next_actions": snap.get("next_actions"),
         }
 
     return mono_queue.run(lambda: safe_execute("scene.create_object", _op, _scene_state_provider))
+
+
+def tool_create_object(
+    type: str = "CUBE",
+    name: str = "Object",
+    location=None,
+    light_type: str = "POINT",
+    **kwargs,
+) -> Dict[str, Any]:
+    """
+    Stable public wrapper for Blender tests.
+    """
+    params = {
+        "type": type,
+        "name": name,
+        "location": location,
+        "light_type": light_type,
+    }
+    params.update(kwargs)
+    return run(params)
