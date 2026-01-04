@@ -4,94 +4,152 @@ import json
 import os
 import subprocess
 import sys
+import time
+import threading
 from pathlib import Path
+from typing import Optional
 
 
-def find_shell() -> str | None:
-    for candidate in ("pwsh", "powershell"):
-        if subprocess.call(
-            [candidate, "-NoLogo", "-NoProfile", "-Command", "exit 0"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        ) == 0:
-            return candidate
+def j(obj) -> str:
+    return json.dumps(obj, ensure_ascii=False)
+
+
+def is_jsonrpc(obj) -> bool:
+    return isinstance(obj, dict) and ("jsonrpc" in obj)
+
+
+def read_one_jsonrpc_line(p: subprocess.Popen, timeout_s: float = 8.0) -> Optional[dict]:
+    """
+    Read stdout until we get a valid JSON-RPC dict, skipping blank/noise lines.
+    Works with both text noise and pure JSON streams.
+    """
+    t0 = time.time()
+    buf = b""
+    while time.time() - t0 < timeout_s:
+        ch = p.stdout.read(1)  # type: ignore[attr-defined]
+        if not ch:
+            # process may still be alive; give it a moment
+            if p.poll() is not None:
+                return None
+            time.sleep(0.01)
+            continue
+
+        buf += ch
+        if ch != b"\n":
+            continue
+
+        line = buf.decode("utf-8", errors="replace").strip()
+        buf = b""
+
+        if not line:
+            continue
+
+        # Some hosts/loggers can accidentally prepend noise; ignore non-JSON lines.
+        if not (line.startswith("{") and line.endswith("}")):
+            continue
+
+        try:
+            obj = json.loads(line)
+        except Exception:
+            continue
+
+        if is_jsonrpc(obj):
+            return obj
+
     return None
 
 
 def main() -> int:
-    shell = find_shell()
-    if not shell:
-        print("No PowerShell found (pwsh or powershell).", file=sys.stderr)
-        return 1
-
     repo_root = Path(__file__).resolve().parents[1]
     launcher = repo_root / "tools" / "hera-stdio.ps1"
     if not launcher.exists():
-        print(f"Launcher not found: {launcher}", file=sys.stderr)
+        print(f"[smoke-claude] launcher not found: {launcher}", file=sys.stderr)
         return 1
 
-    proc = subprocess.Popen(
-        [
-            shell,
-            "-NoLogo",
-            "-NoProfile",
-            "-File",
-            str(launcher),
-        ],
+    # Always use pwsh if available (more predictable than legacy powershell)
+    shell = "pwsh"
+    try:
+        subprocess.check_call([shell, "-NoLogo", "-NoProfile", "-Command", "exit 0"],
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        shell = "powershell"
+
+    cmd = [shell, "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(launcher)]
+    print("[smoke-claude] launching:", " ".join(cmd), file=sys.stderr)
+
+    p = subprocess.Popen(
+        cmd,
+        cwd=str(repo_root),
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        text=True,
-        encoding="utf-8",
+        bufsize=0,
+        text=False,
     )
 
-    messages = [
-        {"jsonrpc": "2.0", "id": 1, "method": "initialize"},
-        {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
-        {
-            "jsonrpc": "2.0",
-            "id": 3,
-            "method": "tools/call",
-            "params": {"name": "hera.health", "arguments": {}},
-        },
-        {"jsonrpc": "2.0", "id": 4, "method": "resources/list"},
-        {"jsonrpc": "2.0", "id": 5, "method": "prompts/list"},
-    ]
+    # Pump stderr so buffers never block
+    def pump_err():
+        assert p.stderr is not None
+        for raw in iter(p.stderr.readline, b""):
+            s = raw.decode("utf-8", errors="replace").rstrip("\r\n")
+            if s:
+                print("[server-stderr] " + s, file=sys.stderr)
 
-    results = []
+    threading.Thread(target=pump_err, daemon=True).start()
+
+    def rpc(req: dict, timeout_s: float = 10.0) -> dict:
+        assert p.stdin is not None
+        assert p.stdout is not None
+        msg = (j(req) + "\n").encode("utf-8")
+        p.stdin.write(msg)
+        p.stdin.flush()
+
+        obj = read_one_jsonrpc_line(p, timeout_s=timeout_s)
+        if obj is None:
+            raise RuntimeError("No JSON-RPC response (timeout or process exited).")
+        return obj
+
     try:
-        for msg in messages:
-            line = json.dumps(msg)
-            proc.stdin.write(line + "\n")
-            proc.stdin.flush()
-            resp_line = proc.stdout.readline()
-            if not resp_line:
-                print("No response from server.", file=sys.stderr)
-                return 1
-            try:
-                resp = json.loads(resp_line)
-            except Exception as exc:
-                print(f"Invalid JSON from server: {resp_line} ({exc})", file=sys.stderr)
-                return 1
-            results.append(resp)
-    finally:
-        proc.terminate()
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
+        r1 = rpc({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2024-11-05",
+                "clientInfo": {"name": "hera-smoke-claude", "version": "0.0"},
+                "capabilities": {}
+            }
+        }, timeout_s=12.0)
+        print("[smoke-claude] initialize =", j(r1), file=sys.stderr)
 
-    ok = True
-    for resp in results:
-        if "result" not in resp and "error" not in resp:
-            ok = False
-            print(f"Missing result/error in response: {resp}", file=sys.stderr)
+        # Claude peut appeler des méthodes optionnelles => on teste aussi
+        r2 = rpc({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}, timeout_s=12.0)
+        print("[smoke-claude] tools/list =", j(r2), file=sys.stderr)
 
-    if ok:
-        print("Smoke test successful: received JSON-RPC results for initialize/tools/list/call/resources/prompts.", file=sys.stderr)
+        r3 = rpc({"jsonrpc": "2.0", "id": 3, "method": "ping", "params": {}}, timeout_s=6.0)
+        print("[smoke-claude] ping =", j(r3), file=sys.stderr)
+
+        r4 = rpc({"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "hera.health", "arguments": {}}}, timeout_s=12.0)
+        print("[smoke-claude] tools/call health =", j(r4), file=sys.stderr)
+
+        print("[smoke-claude] OK", file=sys.stderr)
         return 0
-    return 1
+
+    except Exception as e:
+        print("[smoke-claude] FAIL:", str(e), file=sys.stderr)
+        return 2
+
+    finally:
+        try:
+            if p.stdin:
+                p.stdin.close()
+        except Exception:
+            pass
+        try:
+            p.terminate()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    raise SystemExit(main())

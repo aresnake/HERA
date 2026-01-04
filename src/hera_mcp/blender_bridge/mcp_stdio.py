@@ -162,8 +162,10 @@ def _tool_definitions() -> List[Dict[str, Any]]:
 class MCPStdioServer:
     def __init__(self) -> None:
         self._tools = _tool_definitions()
+        self._shutdown = False
+        self._exit = False
 
-    def handle_request(self, request: Dict[str, Any]) -> Dict[str, Any]:
+    def handle_request(self, request: Dict[str, Any]) -> Dict[str, Any | None]:
         try:
             method = request.get("method")
             request_id = request.get("id")
@@ -171,11 +173,14 @@ class MCPStdioServer:
             keys = list(params.keys()) if isinstance(params, dict) else type(params)
             log_err(f"[mcp] <- method={method} id={request_id} keys={keys}")
 
+            if method == "notifications/initialized":
+                return None
+
             if method == "initialize":
                 result = {
                     "protocolVersion": "2024-11-05",
                     "serverInfo": {"name": "hera-mcp", "version": "0.1.0"},
-                    "capabilities": {},
+                    "capabilities": {"tools": {}, "resources": {}, "prompts": {}},
                 }
                 return make_jsonrpc_response(request_id, result)
 
@@ -199,6 +204,14 @@ class MCPStdioServer:
 
             if method == "prompts/list":
                 return make_jsonrpc_response(request_id, {"prompts": []})
+
+            if method == "shutdown":
+                self._shutdown = True
+                return make_jsonrpc_response(request_id, {"ok": True})
+
+            if method == "exit":
+                self._exit = True
+                return make_jsonrpc_response(request_id, {}) if request_id is not None else None
 
             log_err(f"[mcp] unknown method: {method}")
             return make_error_response(request_id, code=-32601, message="Method not found")
@@ -306,8 +319,11 @@ def main() -> None:
             resp = make_error_response(None, code=-32700, message="Invalid JSON")
         else:
             resp = server.handle_request(message)
-        sys.stdout.write(json.dumps(resp) + "\n")
-        sys.stdout.flush()
+        if resp is not None:
+            sys.stdout.write(json.dumps(resp) + "\n")
+            sys.stdout.flush()
+        if server._exit or server._shutdown:
+            break
 
 
 if __name__ == "__main__":
