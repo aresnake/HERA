@@ -7,8 +7,6 @@ from __future__ import annotations
 import importlib
 from typing import Any, Dict
 
-import bmesh
-
 from hera_mcp.blender_bridge import scene_state
 from hera_mcp.core import envelope
 from hera_mcp.core.coerce import to_name, to_vector3
@@ -59,6 +57,11 @@ def _create_cube(bpy_module, name: str, location):
 
 def _create_sphere(bpy_module, name: str, location):
     mesh = bpy_module.data.meshes.new(f"{name}_mesh")
+    try:
+        import bmesh
+    except Exception as exc:  # pragma: no cover - requires Blender runtime
+        raise RuntimeError(f"bmesh not available: {exc}") from exc
+
     bm = bmesh.new()
     bmesh.ops.create_uvsphere(bm, u_segments=16, v_segments=8, diameter=1)
     bm.to_mesh(mesh)

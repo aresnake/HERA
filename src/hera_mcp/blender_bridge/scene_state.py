@@ -12,7 +12,10 @@ from hera_mcp.core import envelope
 def _lazy_bpy():
     import importlib
 
-    return importlib.import_module("bpy")
+    try:
+        return importlib.import_module("bpy")
+    except Exception:
+        return None
 
 
 def _active_scene(bpy_module) -> Any:
@@ -37,6 +40,9 @@ def snapshot(
     limit: int = envelope.DEFAULT_CHUNK_SIZE,
 ) -> Dict[str, Any]:
     bpy_module = bpy_module or _lazy_bpy()
+    if bpy_module is None:
+        state = {"objects": [], "metadata": {"scene": "none", "count": 0}}
+        return {"scene_state": state, "resume_token": None, "next_actions": None}
     scene = _active_scene(bpy_module)
     objects = list(scene.objects) if scene else []
     chunk, resume_token = envelope.chunk_list(objects, chunk_size=limit, offset=offset)
