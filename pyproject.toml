@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hera-mcp"
+version = "0.1.0"
+description = "HERA: World-class MCP Blender server (headless-first, data-first)."
+requires-python = ">=3.10"
+dependencies = []
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[project.scripts]
+hera-mcp-stdio = "hera_mcp.blender_bridge.mcp_stdio:main"
