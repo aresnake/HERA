@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import json
 import sys
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from hera_mcp.blender_bridge import scene_state
 from hera_mcp.blender_bridge.mcp_protocol import (
@@ -14,7 +14,6 @@ from hera_mcp.blender_bridge.mcp_protocol import (
     make_jsonrpc_response,
 )
 from hera_mcp.core import coerce, envelope
-from hera_mcp.core.queue import operation_manager
 
 
 def _safe_scene_state() -> Dict[str, Any]:
@@ -168,6 +167,9 @@ class MCPStdioServer:
         try:
             method = request.get("method")
             request_id = request.get("id")
+            params = request.get("params")
+            keys = list(params.keys()) if isinstance(params, dict) else type(params)
+            log_err(f"[mcp] <- method={method} id={request_id} keys={keys}")
 
             if method == "initialize":
                 result = {
@@ -184,11 +186,21 @@ class MCPStdioServer:
                 return make_jsonrpc_response(request_id, {"tools": self._tools})
 
             if method == "tools/call":
-                params = request.get("params") or {}
+                params = params or {}
                 name = params.get("name")
                 arguments = params.get("arguments") or {}
+                log_err(
+                    f"[mcp] tools/call name={name} arg_keys={list(arguments.keys()) if isinstance(arguments, dict) else type(arguments)}"
+                )
                 return self._handle_tool_call(request_id, name, arguments)
 
+            if method == "resources/list":
+                return make_jsonrpc_response(request_id, {"resources": []})
+
+            if method == "prompts/list":
+                return make_jsonrpc_response(request_id, {"prompts": []})
+
+            log_err(f"[mcp] unknown method: {method}")
             return make_error_response(request_id, code=-32601, message="Method not found")
         except Exception as exc:  # pragma: no cover - defensive
             log_err(f"handle_request error: {exc}")
@@ -222,7 +234,6 @@ class MCPStdioServer:
                 },
             )
 
-        # Wrap tool execution and always return content.
         try:
             coerced_args = self._coerce_arguments(name, arguments)
             result = tool_fn(**coerced_args) if coerced_args else tool_fn()
