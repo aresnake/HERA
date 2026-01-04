@@ -44,10 +44,11 @@ def run(params: Dict[str, Any] | None = None) -> Dict[str, Any]:
         if absolute_loc is not None:
             obj.location = absolute_loc
         else:
+            current = to_vector3(getattr(obj, "location", (0.0, 0.0, 0.0)))
             obj.location = (
-                float(obj.location.x) + delta[0],
-                float(obj.location.y) + delta[1],
-                float(obj.location.z) + delta[2],
+                float(current[0]) + delta[0],
+                float(current[1]) + delta[1],
+                float(current[2]) + delta[2],
             )
         diff = {"created": [], "modified": [obj.name], "deleted": []}
         snap = scene_state.snapshot()

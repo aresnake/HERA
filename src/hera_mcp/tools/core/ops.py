@@ -67,3 +67,18 @@ def tool_ops_cancel(operation_id: str) -> Dict[str, Any]:
         }
 
     return safe_execute("hera.ops.cancel", _op, _scene_state_provider)
+
+
+def tool_ops_resume(resume_token: str) -> Dict[str, Any]:
+    """
+    Stub resume handler that echoes the token; placeholder for future heavy ops.
+    """
+
+    def _op():
+        return {
+            "status": "partial",
+            "data": {"resume_token": resume_token},
+            "scene_state": {**(_scene_state_provider() or {}), "ok": True},
+        }
+
+    return safe_execute("hera.ops.resume", _op, _scene_state_provider)

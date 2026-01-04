@@ -13,7 +13,7 @@ from hera_mcp.blender_bridge.mcp_protocol import (
     make_error_response,
     make_jsonrpc_response,
 )
-from hera_mcp.core import envelope
+from hera_mcp.core import coerce, envelope
 from hera_mcp.core.queue import operation_manager
 
 
@@ -22,6 +22,11 @@ def _safe_scene_state() -> Dict[str, Any]:
         return scene_state.snapshot().get("scene_state", {})
     except Exception:
         return {"objects": [], "metadata": {"warning": "scene unavailable"}}
+
+
+def log_err(message: str) -> None:
+    sys.stderr.write(f"{message}\n")
+    sys.stderr.flush()
 
 
 def _tool_callable(name: str):
@@ -33,6 +38,10 @@ def _tool_callable(name: str):
         from hera_mcp.tools.scene.snapshot import tool_scene_snapshot
 
         return tool_scene_snapshot
+    if name == "hera.scene.snapshot_chunk":
+        from hera_mcp.tools.scene.snapshot import tool_scene_snapshot_chunk
+
+        return tool_scene_snapshot_chunk
     if name == "hera.scene.create_object":
         from hera_mcp.tools.scene.create_object import tool_create_object
 
@@ -49,6 +58,10 @@ def _tool_callable(name: str):
         from hera_mcp.tools.core.ops import tool_ops_cancel
 
         return tool_ops_cancel
+    if name == "hera.ops.resume":
+        from hera_mcp.tools.core.ops import tool_ops_resume
+
+        return tool_ops_resume
     return None
 
 
@@ -75,6 +88,19 @@ def _tool_definitions() -> List[Dict[str, Any]]:
                         "description": "Start offset for chunking.",
                         "default": 0,
                     },
+                },
+            },
+        },
+        {
+            "name": "hera.scene.snapshot_chunk",
+            "description": "Fetch the next chunk using a stateless token.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "token": {
+                        "type": "string",
+                        "description": "Chunk token from previous snapshot.",
+                    }
                 },
             },
         },
@@ -123,6 +149,14 @@ def _tool_definitions() -> List[Dict[str, Any]]:
                 "properties": {"operation_id": {"type": "string", "description": "Operation id"}},
             },
         },
+        {
+            "name": "hera.ops.resume",
+            "description": "Resume a partial operation using a resume_token.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {"resume_token": {"type": "string", "description": "Opaque resume token"}},
+            },
+        },
     ]
 
 
@@ -157,11 +191,17 @@ class MCPStdioServer:
 
             return make_error_response(request_id, code=-32601, message="Method not found")
         except Exception as exc:  # pragma: no cover - defensive
-            err_payload = envelope.build_error(
-                code="internal_error", message=str(exc), recoverable=False
-            )
+            log_err(f"handle_request error: {exc}")
+            err_payload = envelope.build_error(code="internal_error", message=str(exc), recoverable=False)
             return make_jsonrpc_response(
-                request.get("id"), {"isError": True, "content": [{"type": "text", "text": json.dumps(err_payload)}]}
+                request.get("id"),
+                {
+                    "isError": True,
+                    "content": [
+                        {"type": "text", "text": f"Error: {exc}"},
+                        {"type": "text", "text": json.dumps(err_payload)},
+                    ],
+                },
             )
 
     def _handle_tool_call(self, request_id: Any, name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
@@ -173,30 +213,69 @@ class MCPStdioServer:
             err = envelope.build_error("unknown_tool", f"Unsupported tool: {name}", recoverable=False)
             return make_jsonrpc_response(
                 request_id,
-                {"isError": True, "content": [{"type": "text", "text": json.dumps(err)}]},
+                {
+                    "isError": True,
+                    "content": [
+                        {"type": "text", "text": f"Error: Unsupported tool {name}"},
+                        {"type": "text", "text": json.dumps(err)},
+                    ],
+                },
             )
 
         # Wrap tool execution and always return content.
         try:
-            result = tool_fn(**arguments) if arguments else tool_fn()
+            coerced_args = self._coerce_arguments(name, arguments)
+            result = tool_fn(**coerced_args) if coerced_args else tool_fn()
         except Exception as exc:  # pragma: no cover - defensive
+            log_err(f"tool_call error for {name}: {exc}")
             err = envelope.build_error("tool_failure", str(exc), recoverable=False)
             return make_jsonrpc_response(
                 request_id,
-                {"isError": True, "content": [{"type": "text", "text": json.dumps(err)}]},
+                {
+                    "isError": True,
+                    "content": [
+                        {"type": "text", "text": f"Error: {exc}"},
+                        {"type": "text", "text": json.dumps(err)},
+                    ],
+                },
             )
 
         is_error = result.get("status") in ("error", "failed")
         payload = json.dumps(result)
-        return make_jsonrpc_response(
-            request_id,
-            {
-                "isError": is_error,
-                "content": [
-                    {"type": "text", "text": payload},
-                ],
-            },
-        )
+        content = [{"type": "text", "text": payload}]
+        if is_error:
+            content = [
+                {"type": "text", "text": f"Error: {result.get('error') or result.get('status')}"},
+                {"type": "text", "text": payload},
+            ]
+        return make_jsonrpc_response(request_id, {"isError": is_error, "content": content})
+
+    def _coerce_arguments(self, name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        args: Dict[str, Any] = {}
+        if name == "hera.scene.snapshot":
+            args["limit_objects"] = int(coerce.to_float(arguments.get("limit_objects", arguments.get("limit", 100))))
+            args["offset"] = int(coerce.to_float(arguments.get("offset", 0)))
+        elif name == "hera.scene.snapshot_chunk":
+            token = arguments.get("token") or arguments.get("resume_token") or ""
+            args["token"] = str(token)
+        elif name == "hera.scene.create_object":
+            args["type"] = str(arguments.get("type", "CUBE"))
+            args["name"] = coerce.to_name(arguments.get("name", "Object"))
+            args["location"] = coerce.to_vector3(arguments.get("location"))
+            args["light_type"] = str(arguments.get("light_type", "POINT"))
+        elif name == "hera.scene.move_object":
+            args["name"] = coerce.to_name(arguments.get("name") or arguments.get("object"))
+            if "location" in arguments:
+                args["location"] = coerce.to_vector3(arguments.get("location"))
+            if "delta" in arguments:
+                args["delta"] = coerce.to_vector3(arguments.get("delta"))
+        elif name in ("hera.ops.status", "hera.ops.cancel"):
+            args["operation_id"] = str(arguments.get("operation_id", ""))
+        elif name == "hera.ops.resume":
+            args["resume_token"] = str(arguments.get("resume_token", ""))
+        else:
+            args.update(arguments)
+        return args
 
 
 def main() -> None:
@@ -204,8 +283,7 @@ def main() -> None:
     Blocking stdio loop reading JSON-RPC lines and emitting responses.
     """
     server = MCPStdioServer()
-    sys.stderr.write("hera-mcp stdio server starting\n")
-    sys.stderr.flush()
+    log_err("hera-mcp stdio server starting")
 
     for raw in sys.stdin:
         line = raw.strip()
