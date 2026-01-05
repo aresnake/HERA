@@ -14,7 +14,9 @@ def main() -> None:
     src_path = repo_root / "src"
     if str(src_path) not in sys.path:
         sys.path.insert(0, str(src_path))
-    print("Starting hera_mcp stdio server inside Blender...", file=sys.stderr)
+    # Emit deterministic readiness token to stderr only.
+    sys.stderr.write("HERA_READY\n")
+    sys.stderr.flush()
     runpy.run_module("hera_mcp.blender_bridge.mcp_stdio", run_name="__main__")
 
 

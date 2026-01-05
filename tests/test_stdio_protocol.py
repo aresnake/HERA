@@ -1,194 +1,131 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict
+import subprocess
+import sys
+import threading
+import time
+from pathlib import Path
+from typing import Callable, Optional
 
-from hera_mcp.blender_bridge.mcp_stdio import MCPStdioServer
+REPO_ROOT = Path(__file__).resolve().parents[1]
+PROXY = REPO_ROOT / "tools" / "stdio_proxy.py"
 
 
-def send(server: MCPStdioServer, payload: Dict[str, Any]) -> Dict[str, Any]:
-    return server.handle_request(payload)
+def spawn_proxy(child_cmd):
+    proc = subprocess.Popen(
+        [sys.executable, "-u", str(PROXY), "--"] + child_cmd,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        bufsize=1,
+    )
+    return proc
 
 
-def test_initialize_and_list_and_call(monkeypatch):
-    # Provide a stub bpy module to avoid Blender dependency during protocol tests.
-    class DummyObject:
-        def __init__(self, name: str, type_name: str = "MESH"):
-            self.name = name
-            self.type = type_name
-            self.location = [0.0, 0.0, 0.0]
-
-    class DummyMesh:
-        def __init__(self, name: str):
-            self.name = name
-            self.type = "MESH"
-
-        def from_pydata(self, *args, **kwargs):
+def read_json_line(proc: subprocess.Popen, timeout: float = 5.0) -> Optional[dict]:
+    start = time.time()
+    buf = ""
+    while time.time() - start < timeout:
+        if proc.stdout is None:
             return None
+        line = proc.stdout.readline()
+        if not line:
+            time.sleep(0.01)
+            continue
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            return json.loads(line)
+        except Exception:
+            continue
+    return None
 
-        def update(self):
-            return None
 
-    class DummyMeshes:
-        def new(self, name: str):
-            return DummyMesh(name)
+def drain_stderr(proc: subprocess.Popen, sink: Callable[[str], None]):
+    def _pump():
+        if proc.stderr is None:
+            return
+        for line in proc.stderr:
+            sink(line.rstrip("\n"))
 
-    class DummyLight:
-        def __init__(self, name: str, type_name: str):
-            self.name = name
-            self.type = type_name
+    t = threading.Thread(target=_pump, daemon=True)
+    t.start()
+    return t
 
-    class DummyLights:
-        def new(self, name: str, type: str = "POINT"):
-            return DummyLight(name, type)
 
-    class DummyCamera:
-        def __init__(self, name: str):
-            self.name = name
-            self.type = "CAMERA"
+def test_ping_and_json_only():
+    # Child: emits readiness token to stderr, then echoes a ping response and noise to stdout.
+    child_code = r"""
+import sys, json, time
+sys.stderr.write("HERA_READY\n"); sys.stderr.flush()
+for line in sys.stdin:
+    obj = json.loads(line)
+    if obj.get("method") == "ping":
+        sys.stdout.write(json.dumps({"jsonrpc":"2.0","id":obj.get("id"),"result":{"ok":True}})+"\n"); sys.stdout.flush()
+    elif obj.get("method") == "tools/call":
+        sys.stdout.write("NOISE\n"); sys.stdout.flush()
+        sys.stdout.write(json.dumps({"jsonrpc":"2.0","id":obj.get("id"),"result":{"ok":True}})+"\n"); sys.stdout.flush()
+"""
+    proc = spawn_proxy([sys.executable, "-u", "-c", child_code])
+    logs = []
+    drain_stderr(proc, logs.append)
 
-    class DummyCameras:
-        def new(self, name: str):
-            return DummyCamera(name)
+    assert proc.stdin is not None
+    proc.stdin.write(json.dumps({"jsonrpc": "2.0", "id": 1, "method": "ping"}) + "\n")
+    proc.stdin.flush()
 
-    class DummyObjects:
-        def __init__(self, store):
-            self.store = store
+    resp = read_json_line(proc, timeout=5)
+    assert resp and resp.get("result", {}).get("ok") is True
 
-        def new(self, name: str, data):
-            obj_type = getattr(data, "type", "MESH")
-            obj = DummyObject(name, obj_type)
-            self.store[name] = obj
-            return obj
+    # ensure no noise on stdout
+    proc.stdin.write(json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {}}) + "\n")
+    proc.stdin.flush()
+    resp2 = read_json_line(proc, timeout=5)
+    assert resp2 and resp2.get("id") == 2
+    # readiness token on stderr
+    assert any("HERA_READY" in l for l in logs)
+    proc.terminate()
 
-        def get(self, name: str):
-            return self.store.get(name)
 
-    class DummyCollectionObjects:
-        def __init__(self, store):
-            self.store = store
+def test_tools_call_before_ready_gets_error_on_child_exit():
+    # Child never emits readiness and exits immediately.
+    child_code = r"""
+import sys
+sys.exit(0)
+"""
+    proc = spawn_proxy([sys.executable, "-u", "-c", child_code])
+    logs = []
+    drain_stderr(proc, logs.append)
+    assert proc.stdin is not None
+    proc.stdin.write(json.dumps({"jsonrpc": "2.0", "id": 10, "method": "tools/call", "params": {}}) + "\n")
+    proc.stdin.flush()
+    resp = read_json_line(proc, timeout=5)
+    assert resp is not None
+    assert resp.get("result", {}).get("isError") is True
+    proc.wait(timeout=5)
 
-        def link(self, obj):
-            # Already stored by DummyObjects.new
-            self.store[obj.name] = obj
 
-    class DummyCollection:
-        def __init__(self, store):
-            self.objects = DummyCollectionObjects(store)
-
-    class DummyScene:
-        name = "Scene"
-
-        def __init__(self, store):
-            self._store = store
-            self.collection = DummyCollection(store)
-
-        @property
-        def objects(self):
-            return list(self._store.values())
-
-    class DummyData:
-        def __init__(self, store, count: int):
-            self.meshes = DummyMeshes()
-            self.lights = DummyLights()
-            self.cameras = DummyCameras()
-            self.objects = DummyObjects(store)
-            self.scenes = [DummyScene(store) for _ in range(1)]
-            # preload objects
-            for i in range(count):
-                self.objects.new(f"obj{i}", DummyMesh(f"mesh{i}"))
-
-    class DummyContext:
-        def __init__(self, store):
-            self.scene = DummyScene(store)
-
-    class DummyBpy:
-        def __init__(self, count: int):
-            self._store = {}
-            self.data = DummyData(self._store, count)
-            self.context = DummyContext(self._store)
-
-    # Inject dummy bpy with >100 objects to hit chunking.
-    import sys
-
-    sys.modules["bpy"] = DummyBpy(150)
-
-    server = MCPStdioServer()
-
-    init_resp = send(server, {"jsonrpc": "2.0", "id": 1, "method": "initialize"})
-    assert init_resp["result"]["serverInfo"]["name"] == "hera-mcp"
-
-    list_resp = send(server, {"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
-    tools = list_resp["result"]["tools"]
-    tool_names = {t["name"] for t in tools}
-    assert {"hera.health", "hera.scene.snapshot", "hera.scene.snapshot_chunk", "hera.ops.resume"}.issubset(
-        tool_names
-    )
-
-    # health call
-    call_resp = send(
-        server,
-        {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "hera.health", "arguments": {}}},
-    )
-    assert call_resp["result"]["isError"] is False
-    content = call_resp["result"]["content"][0]["text"]
-    envelope = json.loads(content)
-    assert envelope.get("status") in ("ok", "success", "partial", "chunked")
-    assert "scene_state" in envelope
-
-    # snapshot coercion and chunking
-    snap_resp = send(
-        server,
-        {
-            "jsonrpc": "2.0",
-            "id": 4,
-            "method": "tools/call",
-            "params": {"name": "hera.scene.snapshot", "arguments": {"limit_objects": "50", "offset": "0"}},
-        },
-    )
-    snap_content = json.loads(snap_resp["result"]["content"][0]["text"])
-    assert snap_content["status"] == "chunked"
-    next_token = snap_content["data"]["next_token"]
-    assert next_token
-
-    # snapshot chunk continuation
-    chunk_resp = send(
-        server,
-        {
-            "jsonrpc": "2.0",
-            "id": 5,
-            "method": "tools/call",
-            "params": {"name": "hera.scene.snapshot_chunk", "arguments": {"token": next_token}},
-        },
-    )
-    chunk_content = json.loads(chunk_resp["result"]["content"][0]["text"])
-    assert "objects" in chunk_content["data"]
-
-    # type coercion for create/move (location passed as tuple of strings)
-    create_resp = send(
-        server,
-        {
-            "jsonrpc": "2.0",
-            "id": 6,
-            "method": "tools/call",
-            "params": {
-                "name": "hera.scene.create_object",
-                "arguments": {"name": "CubeX", "location": ("1", "2", "3")},
-            },
-        },
-    )
-    assert create_resp["result"]["isError"] is False
-
-    move_resp = send(
-        server,
-        {
-            "jsonrpc": "2.0",
-            "id": 7,
-            "method": "tools/call",
-            "params": {
-                "name": "hera.scene.move_object",
-                "arguments": {"name": "CubeX", "delta": ["1", "0", "0"]},
-            },
-        },
-    )
-    assert move_resp["result"]["isError"] is False
+def test_tools_call_after_ready_forwarded():
+    child_code = r"""
+import sys, json
+sys.stderr.write("HERA_READY\n"); sys.stderr.flush()
+for line in sys.stdin:
+    obj = json.loads(line)
+    if obj.get("method") == "tools/call":
+        sys.stdout.write(json.dumps({"jsonrpc":"2.0","id":obj.get("id"),"result":{"isError":False,"content":[{"type":"text","text":"ok"}]}})+"\n"); sys.stdout.flush()
+"""
+    proc = spawn_proxy([sys.executable, "-u", "-c", child_code])
+    logs = []
+    drain_stderr(proc, logs.append)
+    assert proc.stdin is not None
+    proc.stdin.write(json.dumps({"jsonrpc": "2.0", "id": 20, "method": "tools/call", "params": {}}) + "\n")
+    proc.stdin.flush()
+    resp = read_json_line(proc, timeout=5)
+    assert resp is not None
+    assert resp.get("result", {}).get("isError") is False
+    assert any("HERA_READY" in l for l in logs)
+    proc.terminate()

@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import queue
 import subprocess
 import sys
 import threading
@@ -14,6 +13,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 
 CAPABILITIES = {"tools": {}, "resources": {}, "prompts": {}}
+READY_TOKEN = "HERA_READY"
 
 TOOLS_LIST = [
     {
@@ -125,7 +125,15 @@ def bootstrap_response(req: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if method == "notifications/initialized":
         return None
     if method == "initialize":
-        return {"jsonrpc": "2.0", "id": rid, "result": {"protocolVersion": "2024-11-05", "serverInfo": {"name": "hera-mcp-proxy", "version": "0.1.0"}, "capabilities": CAPABILITIES}}
+        return {
+            "jsonrpc": "2.0",
+            "id": rid,
+            "result": {
+                "protocolVersion": "2024-11-05",
+                "serverInfo": {"name": "hera-mcp-proxy", "version": "0.1.0"},
+                "capabilities": CAPABILITIES,
+            },
+        }
     if method == "ping":
         return {"jsonrpc": "2.0", "id": rid, "result": {"ok": True}}
     if method == "tools/list":
@@ -138,15 +146,6 @@ def bootstrap_response(req: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return {"jsonrpc": "2.0", "id": rid, "result": {"ok": True}}
     if method == "exit":
         return {"jsonrpc": "2.0", "id": rid, "result": {}}
-    if method == "tools/call":
-        return {
-            "jsonrpc": "2.0",
-            "id": rid,
-            "result": {
-                "isError": True,
-                "content": [{"type": "text", "text": "Server booting; retry shortly"}],
-            },
-        }
     return None
 
 
@@ -206,7 +205,6 @@ class Proxy:
         assert self.child and self.child.stdout
         for line in self.child.stdout:
             if looks_like_jsonrpc(line):
-                self.mark_ready()
                 sys.stdout.write(line)
                 sys.stdout.flush()
             else:
@@ -216,7 +214,7 @@ class Proxy:
     def pump_child_stderr(self) -> None:
         assert self.child and self.child.stderr
         for line in self.child.stderr:
-            if "hera-mcp stdio server starting" in line or "[mcp] <-" in line or "[mcp] ready" in line:
+            if READY_TOKEN in line:
                 self.mark_ready()
             sys.stderr.write(f"[child-stderr] {line}")
             sys.stderr.flush()
@@ -232,11 +230,9 @@ class Proxy:
             try:
                 req = json.loads(line)
             except Exception:
-                # Do not emit non-JSON to stdout; log to stderr.
                 log_err(f"[proxy] invalid JSON from parent: {line}")
                 continue
 
-            # Shutdown/exit checks.
             method = req.get("method")
             if method == "exit":
                 self.shutdown.set()
@@ -256,11 +252,9 @@ class Proxy:
                     self.enqueue_request(req.get("id"), line)
                     log_err(f"[proxy] queued tools/call id={req.get('id')} (booting)")
                 else:
-                    # For other methods, attempt to forward if harmless.
                     self.enqueue_request(req.get("id"), line)
                 continue
 
-            # Ready: forward to child.
             try:
                 self.child.stdin.write(line + "\n")
                 self.child.stdin.flush()
@@ -271,7 +265,6 @@ class Proxy:
             if method in ("shutdown", "exit"):
                 self.shutdown.set()
                 break
-        # after stdin closed, flush queued if ready
         if self.ready.is_set():
             self.flush_queued()
         self.shutdown.set()
@@ -287,11 +280,9 @@ class Proxy:
         stderr_thread.start()
         stdin_thread.start()
 
-        # Wait for child.
         code = self.child.wait()
         self.shutdown.set()
         if not self.ready.is_set():
-            # Child died before ready; send errors for queued requests.
             with self.queue_lock:
                 queued = list(self.queue)
                 self.queue.clear()
