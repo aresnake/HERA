@@ -1,1 +1,1 @@
-__all__ = ["snapshot", "create_object", "move_object"]
+__all__ = ["snapshot", "create_object", "move_object", "get_object"]
