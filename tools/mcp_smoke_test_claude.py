@@ -129,8 +129,41 @@ def main() -> int:
         r3 = rpc({"jsonrpc": "2.0", "id": 3, "method": "ping", "params": {}}, timeout_s=6.0)
         print("[smoke-claude] ping =", j(r3), file=sys.stderr)
 
-        r4 = rpc({"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "hera.health", "arguments": {}}}, timeout_s=12.0)
-        print("[smoke-claude] tools/call health =", j(r4), file=sys.stderr)
+        # Retry tools/call health until success (queue may delay responses during boot)
+        success = False
+        for attempt in range(1, 21):
+            try:
+                r4 = rpc(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 100 + attempt,
+                        "method": "tools/call",
+                        "params": {"name": "hera.health", "arguments": {}},
+                    },
+                    timeout_s=2.0,
+                )
+            except Exception as exc:
+                time.sleep(0.25)
+                continue
+            result = r4.get("result", {})
+            is_error = result.get("isError")
+            if not is_error:
+                # Validate content is a JSON string with status success
+                content = result.get("content") or []
+                if content and isinstance(content[0], dict):
+                    text = content[0].get("text", "")
+                    try:
+                        env = json.loads(text)
+                        if env.get("status") == "success":
+                            success = True
+                            print("[smoke-claude] tools/call health =", j(r4), file=sys.stderr)
+                            break
+                    except Exception:
+                        pass
+            time.sleep(0.25)
+
+        if not success:
+            raise RuntimeError("tools/call health did not succeed after retries.")
 
         print("[smoke-claude] OK", file=sys.stderr)
         return 0
