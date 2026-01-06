@@ -51,21 +51,12 @@ def _tool_callable(name: str):
 
     if name == "hera.object.get":
         from hera_mcp.tools.scene.get_object import tool_get_object
-        
-from hera_mcp.tools.scene.set_transform import tool_set_transform
-return tool_get_object
+        return tool_get_object
 
     if name == "hera.object.set_transform":
-        obj_name = str(args.get("name", ""))
-        location = args.get("location", None)
-        rotation_euler = args.get("rotation_euler", None)
-        scale = args.get("scale", None)
-        return tool_set_transform(
-            name=obj_name,
-            location=location,
-            rotation_euler=rotation_euler,
-            scale=scale,
-        )
+        from hera_mcp.tools.scene.set_transform import tool_set_transform
+        return tool_set_transform
+
     if name == "hera.ops.status":
         from hera_mcp.tools.core.ops import tool_ops_status
         return tool_ops_status
@@ -323,7 +314,17 @@ class MCPStdioServer:
                 args["delta"] = coerce.to_vector3(arguments.get("delta"))
         elif name == "hera.object.get":
             args["name"] = coerce.to_name(arguments.get("name") or arguments.get("object"))
-        elif name in ("hera.ops.status", "hera.ops.cancel"):
+        
+
+        elif name == "hera.object.set_transform":
+            args["name"] = coerce.to_name(arguments.get("name") or arguments.get("object"))
+            if "location" in arguments:
+                args["location"] = coerce.to_vector3(arguments.get("location"))
+            if "rotation_euler" in arguments:
+                args["rotation_euler"] = coerce.to_vector3(arguments.get("rotation_euler"))
+            if "scale" in arguments:
+                args["scale"] = coerce.to_vector3(arguments.get("scale"))
+elif name in ("hera.ops.status", "hera.ops.cancel"):
             args["operation_id"] = str(arguments.get("operation_id", ""))
         elif name == "hera.ops.resume":
             args["resume_token"] = str(arguments.get("resume_token", ""))
@@ -358,4 +359,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
