@@ -51,8 +51,21 @@ def _tool_callable(name: str):
 
     if name == "hera.object.get":
         from hera_mcp.tools.scene.get_object import tool_get_object
-        return tool_get_object
+        
+from hera_mcp.tools.scene.set_transform import tool_set_transform
+return tool_get_object
 
+    if name == "hera.object.set_transform":
+        obj_name = str(args.get("name", ""))
+        location = args.get("location", None)
+        rotation_euler = args.get("rotation_euler", None)
+        scale = args.get("scale", None)
+        return tool_set_transform(
+            name=obj_name,
+            location=location,
+            rotation_euler=rotation_euler,
+            scale=scale,
+        )
     if name == "hera.ops.status":
         from hera_mcp.tools.core.ops import tool_ops_status
         return tool_ops_status
@@ -345,3 +358,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
