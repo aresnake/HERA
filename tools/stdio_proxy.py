@@ -103,6 +103,18 @@ TOOLS_LIST = [
             "properties": {"resume_token": {"type": "string", "description": "Opaque resume token"}},
         },
     },
+
+    {
+        "name": "hera.object.get",
+        "description": "Inspect an object (type/location/rotation/scale).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Object name to inspect"}
+            },
+            "required": ["name"]
+        },
+    },
 ]
 
 
