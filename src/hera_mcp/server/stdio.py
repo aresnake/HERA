@@ -3,192 +3,142 @@ from __future__ import annotations
 import json
 import sys
 import traceback
-from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
+from hera_mcp.tools.blender_client import call_tool, wait_worker
 
 JSON = Dict[str, Any]
 
 
-@dataclass
-class ToolSpec:
-    name: str
-    description: str
-    input_schema: JSON
-
-
-class ToolRegistry:
-    def __init__(self) -> None:
-        self._tools: Dict[str, ToolSpec] = {}
-        self._handlers: Dict[str, Any] = {}
-
-    def register(self, spec: ToolSpec, handler) -> None:
-        self._tools[spec.name] = spec
-        self._handlers[spec.name] = handler
-
-    def list_specs(self) -> List[JSON]:
-        return [
-            {
-                "name": t.name,
-                "description": t.description,
-                "inputSchema": t.input_schema,
-            }
-            for t in sorted(self._tools.values(), key=lambda x: x.name)
-        ]
-
-    def call(self, name: str, arguments: Optional[JSON]) -> Any:
-        if name not in self._handlers:
-            raise MCPError(code="tool_not_found", message=f"Unknown tool: {name}")
-        return self._handlers[name](arguments or {})
-
-
-class MCPError(RuntimeError):
-    def __init__(self, code: str, message: str, data: Optional[JSON] = None) -> None:
-        super().__init__(message)
-        self.code = code
-        self.message = message
-        self.data = data or {}
-
-
-def _write(msg: JSON) -> None:
-    sys.stdout.write(json.dumps(msg, ensure_ascii=False) + "\n")
+def _write(obj: JSON) -> None:
+    sys.stdout.write(json.dumps(obj, ensure_ascii=False) + "\n")
     sys.stdout.flush()
 
 
-def _err_to_json(exc: BaseException) -> JSON:
-    if isinstance(exc, MCPError):
-        return {
-            "code": exc.code,
-            "message": exc.message,
-            "data": exc.data,
-        }
-    return {
-        "code": "internal_error",
-        "message": str(exc),
-        "data": {
-            "type": type(exc).__name__,
-            "traceback": traceback.format_exc(limit=20),
+def _err(req_id: Any, code: str, message: str, data: Optional[JSON] = None) -> JSON:
+    e: JSON = {"code": code, "message": message}
+    if data is not None:
+        e["data"] = data
+    return {"jsonrpc": "2.0", "id": req_id, "error": e}
+
+
+def _ok(req_id: Any, result: Any) -> JSON:
+    return {"jsonrpc": "2.0", "id": req_id, "result": result}
+
+
+def _tool_specs() -> list[JSON]:
+    return [
+        {
+            "name": "hera.ping",
+            "description": "Local ping (does not require Blender).",
+            "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
         },
-    }
-
-
-def _make_registry() -> ToolRegistry:
-    reg = ToolRegistry()
-
-    reg.register(
-        ToolSpec(
-            name="hera.ping",
-            description="Health check tool; returns pong.",
-            input_schema={
+        {
+            "name": "hera.list_objects",
+            "description": "List objects in the current Blender scene (proxy).",
+            "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
+        },
+        {
+            "name": "hera.create_cube",
+            "description": "Create a cube in Blender (proxy).",
+            "inputSchema": {
                 "type": "object",
-                "properties": {},
+                "properties": {"name": {"type": "string"}, "size": {"type": "number"}},
                 "additionalProperties": False,
             },
-        ),
-        lambda args: {"pong": True},
-    )
+        },
+        {
+            "name": "hera.fail",
+            "description": "Always fails (local), used to test error normalization.",
+            "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
+        },
+    ]
 
-    reg.register(
-        ToolSpec(
-            name="hera.echo",
-            description="Echo back the provided payload.",
-            input_schema={
-                "type": "object",
-                "properties": {
-                    "value": {},
-                },
-                "required": ["value"],
-                "additionalProperties": False,
+
+def _call_proxy(tool_name: str, args: JSON) -> JSON:
+    try:
+        wait_worker(timeout_s=5.0)
+        return call_tool(tool_name, args)
+    except Exception as exc:
+        return {
+            "ok": False,
+            "error": {
+                "code": "blender_unreachable",
+                "message": str(exc),
+                "details": {"exception": type(exc).__name__},
             },
-        ),
-        lambda args: {"value": args.get("value")},
-    )
-
-    # Intentional error tool for testing error normalization
-    def _fail(_args: JSON) -> Any:
-        raise MCPError(code="forced_error", message="This is an intentional test error.")
-
-    reg.register(
-        ToolSpec(
-            name="hera.fail",
-            description="Always fails with a normalized MCP error.",
-            input_schema={
-                "type": "object",
-                "properties": {},
-                "additionalProperties": False,
-            },
-        ),
-        _fail,
-    )
-
-    return reg
+        }
 
 
-def handle_request(req: JSON, reg: ToolRegistry) -> Optional[JSON]:
-    # Minimal JSON-RPC 2.0
-    if req.get("jsonrpc") != "2.0":
-        raise MCPError(code="invalid_request", message="jsonrpc must be '2.0'")
+def _handle_tools_call(params: JSON) -> JSON:
+    name = params.get("name")
+    args = params.get("arguments") or {}
 
-    req_id = req.get("id", None)
-    method = req.get("method")
+    if not isinstance(name, str) or not name:
+        return {"ok": False, "error": {"code": "invalid_request", "message": "missing tool name"}}
+    if not isinstance(args, dict):
+        return {"ok": False, "error": {"code": "invalid_request", "message": "arguments must be an object"}}
 
-    # Notifications: id may be omitted
-    def result(payload: Any) -> Optional[JSON]:
-        if req_id is None:
-            return None
-        return {"jsonrpc": "2.0", "id": req_id, "result": payload}
+    # ✅ Local ping (NO Blender dependency) — required by tests
+    if name == "hera.ping":
+        return {"ok": True, "result": {"pong": True}}
 
-    if method == "initialize":
-        params = req.get("params") or {}
-        # Keep this minimal; versioning can evolve later.
-        return result(
-            {
-                "protocolVersion": "0.1",
-                "serverInfo": {"name": "hera-mcp", "version": "0.0.1"},
-                "capabilities": {
-                    "tools": True,
-                },
-                "client": params.get("clientInfo", {}),
-            }
-        )
+    # Local forced error (must NOT require Blender)
+    if name == "hera.fail":
+        return {"ok": False, "error": {"code": "forced_error", "message": "forced failure for tests"}}
 
-    if method == "tools/list":
-        return result({"tools": reg.list_specs()})
+    # Proxy tools
+    if name == "hera.list_objects":
+        return _call_proxy("list_objects", {})
+    if name == "hera.create_cube":
+        return _call_proxy("create_cube", args)
 
-    if method == "tools/call":
-        params = req.get("params") or {}
-        name = params.get("name")
-        arguments = params.get("arguments") or {}
-        if not isinstance(name, str) or not name:
-            raise MCPError(code="invalid_params", message="tools/call requires params.name (string)")
-        out = reg.call(name=name, arguments=arguments)
-        return result({"content": [{"type": "json", "json": out}]})
-
-    raise MCPError(code="method_not_found", message=f"Unknown method: {method}")
+    return {"ok": False, "error": {"code": "unknown_tool", "message": f"Unknown tool: {name}"}}
 
 
 def main() -> None:
-    reg = _make_registry()
-
     for line in sys.stdin:
-        line = line.strip()
-        if not line:
+        raw = (line or "").strip()
+        if not raw:
             continue
+
         try:
-            req = json.loads(line)
-            resp = handle_request(req, reg)
-            if resp is not None:
-                _write(resp)
-        except BaseException as exc:
-            err = _err_to_json(exc)
-            # If request id is recoverable, include it; otherwise null
-            try:
-                req_id = None
-                if isinstance(req, dict):
-                    req_id = req.get("id", None)
-            except Exception:
-                req_id = None
-            _write({"jsonrpc": "2.0", "id": req_id, "error": err})
+            req = json.loads(raw)
+        except Exception:
+            _write(_err(None, "parse_error", "Invalid JSON"))
+            continue
+
+        req_id = req.get("id", None)
+        method = req.get("method")
+        params = req.get("params") or {}
+
+        try:
+            if method == "initialize":
+                result = {
+                    "protocolVersion": params.get("protocolVersion", "2024-11-05"),
+                    "capabilities": {"tools": {}},
+                    "serverInfo": {"name": "hera-mcp", "version": "0.0.1"},
+                }
+                _write(_ok(req_id, result))
+                continue
+
+            if method == "tools/list":
+                _write(_ok(req_id, {"tools": _tool_specs()}))
+                continue
+
+            if method == "tools/call":
+                call_res = _handle_tools_call(params if isinstance(params, dict) else {})
+                if call_res.get("ok") is True:
+                    _write(_ok(req_id, {"content": [{"type": "text", "json": call_res.get("result", {})}]}))
+                else:
+                    err = call_res.get("error") or {}
+                    _write(_err(req_id, err.get("code", "execution_error"), err.get("message", "error"), {"raw": err}))
+                continue
+
+            _write(_err(req_id, "method_not_found", f"Unknown method: {method}"))
+
+        except Exception as exc:
+            _write(_err(req_id, "internal_error", str(exc), {"traceback": traceback.format_exc()}))
 
 
 if __name__ == "__main__":
