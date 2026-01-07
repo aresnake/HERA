@@ -1,0 +1,8 @@
+# Force LF in repo, keep working tree reasonable on Windows
+* text=auto eol=lf
+
+*.ps1 text eol=lf
+*.py  text eol=lf
+*.md  text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
