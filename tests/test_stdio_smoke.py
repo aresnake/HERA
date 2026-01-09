@@ -36,6 +36,9 @@ def test_initialize():
 def test_tools_list_and_call():
     r = _run({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
     names = [t["name"] for t in r["result"]["tools"]]
+    assert "hera.blender.object.exists" in names
+    assert "hera.blender.object.get_location" in names
+    assert "hera.blender.scene.get_active_object" in names
     assert "hera.ping" in names
 
     r2 = _run({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "hera.ping", "arguments": {}}})

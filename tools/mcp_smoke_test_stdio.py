@@ -104,6 +104,9 @@ def main() -> None:
 
         tools = list_resp["result"]["tools"]
         names = [t.get("name") for t in tools]
+        assert "hera.blender.object.exists" in names
+        assert "hera.blender.object.get_location" in names
+        assert "hera.blender.scene.get_active_object" in names
         assert "hera.ping" in names
         assert "hera.blender.version" in names
         assert "hera.blender.scene.list_objects" in names
@@ -148,6 +151,49 @@ def main() -> None:
         move_json = move_resp.get("result", {}).get("content", [{}])[0].get("json", {})
         assert move_json.get("name") == "Cube", move_resp
         assert move_json.get("location") == [1.0, 2.0, 3.0], move_resp
+
+        _send(
+            p,
+            {
+                "jsonrpc": "2.0",
+                "id": 8,
+                "method": "tools/call",
+                "params": {"name": "hera.blender.object.exists", "arguments": {"name": "Cube"}},
+            },
+        )
+        exists_resp = _recv(out_q, timeout_s=15.0)
+        exists_json = exists_resp.get("result", {}).get("content", [{}])[0].get("json", {})
+        assert exists_json.get("exists") is True, exists_resp
+
+        _send(
+            p,
+            {
+                "jsonrpc": "2.0",
+                "id": 9,
+                "method": "tools/call",
+                "params": {"name": "hera.blender.object.get_location", "arguments": {"name": "Cube"}},
+            },
+        )
+        loc_resp = _recv(out_q, timeout_s=15.0)
+        loc_json = loc_resp.get("result", {}).get("content", [{}])[0].get("json", {})
+        loc = loc_json.get("location") or []
+        assert len(loc) == 3, loc_resp
+        assert abs(loc[0] - 1.0) < 1e-4, loc_resp
+        assert abs(loc[1] - 2.0) < 1e-4, loc_resp
+        assert abs(loc[2] - 3.0) < 1e-4, loc_resp
+
+        _send(
+            p,
+            {
+                "jsonrpc": "2.0",
+                "id": 10,
+                "method": "tools/call",
+                "params": {"name": "hera.blender.scene.get_active_object", "arguments": {}},
+            },
+        )
+        active_resp = _recv(out_q, timeout_s=15.0)
+        active_json = active_resp.get("result", {}).get("content", [{}])[0].get("json", {})
+        assert active_json.get("name") in ("Cube", None), active_resp
 
         _send(
             p,

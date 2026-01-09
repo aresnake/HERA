@@ -57,6 +57,31 @@ def _tool_specs() -> list[JSON]:
             },
         },
         {
+            "name": "hera.blender.object.exists",
+            "description": "Check if a Blender object exists by name (proxy).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {"name": {"type": "string"}},
+                "required": ["name"],
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "hera.blender.object.get_location",
+            "description": "Get a Blender object's location by name (proxy).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {"name": {"type": "string"}},
+                "required": ["name"],
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "hera.blender.scene.get_active_object",
+            "description": "Get the active object in Blender (proxy).",
+            "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
+        },
+        {
             "name": "hera.list_objects",
             "description": "List objects in the current Blender scene (proxy).",
             "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
@@ -121,6 +146,12 @@ def _handle_tools_call(params: JSON) -> JSON:
         return _call_proxy("blender.scene.list_objects", {})
     if name == "hera.blender.object.move":
         return _call_proxy("blender.object.move", args)
+    if name == "hera.blender.object.exists":
+        return _call_proxy("blender.object.exists", args)
+    if name == "hera.blender.object.get_location":
+        return _call_proxy("blender.object.get_location", args)
+    if name == "hera.blender.scene.get_active_object":
+        return _call_proxy("blender.scene.get_active_object", {})
 
     return {"ok": False, "error": {"code": "unknown_tool", "message": f"Unknown tool: {name}"}}
 

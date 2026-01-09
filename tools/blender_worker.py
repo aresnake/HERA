@@ -137,6 +137,37 @@ def _move_object(args: JSON) -> JSON:
     return {"name": obj.name, "location": [float(obj.location[0]), float(obj.location[1]), float(obj.location[2])]}
 
 
+def _object_exists(args: JSON) -> JSON:
+    name = args.get("name")
+    if not isinstance(name, str) or not name:
+        raise ToolError("invalid_arguments", "name must be a non-empty string")
+    return {"name": name, "exists": bpy.data.objects.get(name) is not None}
+
+
+def _object_get_location(args: JSON) -> JSON:
+    name = args.get("name")
+    if not isinstance(name, str) or not name:
+        raise ToolError("invalid_arguments", "name must be a non-empty string")
+    obj = bpy.data.objects.get(name)
+    if obj is None:
+        raise ToolError("not_found", f"object not found: {name}", {"name": name})
+    return {"name": obj.name, "location": [float(obj.location[0]), float(obj.location[1]), float(obj.location[2])]}
+
+
+def _scene_get_active_object() -> JSON:
+    try:
+        ctx = bpy.context
+    except Exception:
+        return {"name": None}
+    try:
+        obj = ctx.active_object
+    except Exception:
+        return {"name": None}
+    if obj is None:
+        return {"name": None}
+    return {"name": obj.name}
+
+
 def _dispatch_tool(name: str, args: JSON) -> JSON:
     if name == "ping":
         return {"pong": True, "blender": _blender_version()}
@@ -146,6 +177,12 @@ def _dispatch_tool(name: str, args: JSON) -> JSON:
         return _list_objects()
     if name == "blender.object.move":
         return _move_object(args)
+    if name == "blender.object.exists":
+        return _object_exists(args)
+    if name == "blender.object.get_location":
+        return _object_get_location(args)
+    if name == "blender.scene.get_active_object":
+        return _scene_get_active_object()
     raise ValueError(f"Unknown tool: {name}")
 
 
