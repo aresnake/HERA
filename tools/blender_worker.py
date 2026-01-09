@@ -7,9 +7,10 @@ import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Sequence
 
 import bpy
+import bmesh
 
 JSON = Dict[str, Any]
 
@@ -77,6 +78,37 @@ def _scene_for_link() -> bpy.types.Scene:
     return bpy.context.scene
 
 
+def _link_object(obj: bpy.types.Object) -> None:
+    try:
+        ctx = bpy.context
+        if hasattr(ctx, "scene") and ctx.scene is not None:
+            ctx.scene.collection.objects.link(obj)
+            return
+    except Exception:
+        pass
+    _scene_for_link().collection.objects.link(obj)
+
+
+def _unique_object_name(base: str) -> str:
+    if bpy.data.objects.get(base) is None:
+        return base
+    i = 1
+    while True:
+        candidate = f"{base}.{i:03d}"
+        if bpy.data.objects.get(candidate) is None:
+            return candidate
+        i += 1
+
+
+def _vec3(value: Any, name: str) -> Sequence[float]:
+    if not isinstance(value, (list, tuple)) or len(value) != 3:
+        raise ToolError("invalid_arguments", f"{name} must be an array of 3 numbers")
+    try:
+        return (float(value[0]), float(value[1]), float(value[2]))
+    except Exception as exc:
+        raise ToolError("invalid_arguments", f"{name} must contain numbers") from exc
+
+
 def _ensure_cube() -> None:
     if bpy.data.objects.get("Cube"):
         return
@@ -106,7 +138,7 @@ def _ensure_cube() -> None:
     mesh.from_pydata(verts, [], faces)
     mesh.update()
     obj = bpy.data.objects.new("Cube", mesh)
-    _scene_for_link().collection.objects.link(obj)
+    _link_object(obj)
 
 
 def _list_objects() -> JSON:
@@ -124,10 +156,7 @@ def _move_object(args: JSON) -> JSON:
     if not isinstance(location, (list, tuple)) or len(location) != 3:
         raise ToolError("invalid_arguments", "location must be an array of 3 numbers")
 
-    try:
-        loc = (float(location[0]), float(location[1]), float(location[2]))
-    except Exception as exc:
-        raise ToolError("invalid_arguments", "location must contain numbers") from exc
+    loc = _vec3(location, "location")
 
     obj = bpy.data.objects.get(name)
     if obj is None:
@@ -135,6 +164,173 @@ def _move_object(args: JSON) -> JSON:
 
     obj.location = loc
     return {"name": obj.name, "location": [float(obj.location[0]), float(obj.location[1]), float(obj.location[2])]}
+
+
+def _create_mesh_object(
+    base_name: str, bm: bmesh.types.BMesh, location: Sequence[float]
+) -> JSON:
+    obj_name = _unique_object_name(base_name)
+    mesh = bpy.data.meshes.new(f"{obj_name}_mesh")
+    bm.to_mesh(mesh)
+    bm.free()
+    obj = bpy.data.objects.new(obj_name, mesh)
+    _link_object(obj)
+    obj.location = location
+    return {
+        "name": obj.name,
+        "created": True,
+        "location": [float(obj.location[0]), float(obj.location[1]), float(obj.location[2])],
+    }
+
+
+def _mesh_create_cube(args: JSON) -> JSON:
+    name = args.get("name") or "Cube"
+    size = args.get("size", 2.0)
+    location = args.get("location", (0.0, 0.0, 0.0))
+
+    if not isinstance(name, str):
+        raise ToolError("invalid_arguments", "name must be a string")
+    try:
+        size_f = float(size)
+    except Exception as exc:
+        raise ToolError("invalid_arguments", "size must be a number") from exc
+    loc = _vec3(location, "location")
+
+    bm = bmesh.new()
+    bmesh.ops.create_cube(bm, size=size_f)
+    return _create_mesh_object(name, bm, loc)
+
+
+def _mesh_create_uv_sphere(args: JSON) -> JSON:
+    name = args.get("name") or "Sphere"
+    radius = args.get("radius", 1.0)
+    segments = args.get("segments", 32)
+    rings = args.get("rings", 16)
+    location = args.get("location", (0.0, 0.0, 0.0))
+
+    if not isinstance(name, str):
+        raise ToolError("invalid_arguments", "name must be a string")
+    try:
+        radius_f = float(radius)
+    except Exception as exc:
+        raise ToolError("invalid_arguments", "radius must be a number") from exc
+    try:
+        segments_i = int(segments)
+        rings_i = int(rings)
+    except Exception as exc:
+        raise ToolError("invalid_arguments", "segments and rings must be integers") from exc
+    loc = _vec3(location, "location")
+
+    bm = bmesh.new()
+    bmesh.ops.create_uvsphere(bm, u_segments=segments_i, v_segments=rings_i, radius=radius_f)
+    return _create_mesh_object(name, bm, loc)
+
+
+def _mesh_create_cylinder(args: JSON) -> JSON:
+    name = args.get("name") or "Cylinder"
+    radius = args.get("radius", 1.0)
+    depth = args.get("depth", 2.0)
+    vertices = args.get("vertices", 32)
+    location = args.get("location", (0.0, 0.0, 0.0))
+
+    if not isinstance(name, str):
+        raise ToolError("invalid_arguments", "name must be a string")
+    try:
+        radius_f = float(radius)
+        depth_f = float(depth)
+    except Exception as exc:
+        raise ToolError("invalid_arguments", "radius and depth must be numbers") from exc
+    try:
+        vertices_i = int(vertices)
+    except Exception as exc:
+        raise ToolError("invalid_arguments", "vertices must be an integer") from exc
+    loc = _vec3(location, "location")
+
+    bm = bmesh.new()
+    bmesh.ops.create_cone(
+        bm,
+        segments=vertices_i,
+        radius1=radius_f,
+        radius2=radius_f,
+        depth=depth_f,
+        cap_ends=True,
+    )
+    return _create_mesh_object(name, bm, loc)
+
+
+def _object_rename(args: JSON) -> JSON:
+    src = args.get("from")
+    dst = args.get("to")
+    if not isinstance(src, str) or not src:
+        raise ToolError("invalid_arguments", "from must be a non-empty string")
+    if not isinstance(dst, str) or not dst:
+        raise ToolError("invalid_arguments", "to must be a non-empty string")
+
+    obj = bpy.data.objects.get(src)
+    if obj is None:
+        raise ToolError("not_found", f"object not found: {src}", {"name": src})
+    if bpy.data.objects.get(dst) is not None:
+        raise ToolError("already_exists", f"object already exists: {dst}", {"name": dst})
+
+    obj.name = dst
+    return {"from": src, "to": obj.name}
+
+
+def _object_delete(args: JSON) -> JSON:
+    name = args.get("name")
+    if not isinstance(name, str) or not name:
+        raise ToolError("invalid_arguments", "name must be a non-empty string")
+    obj = bpy.data.objects.get(name)
+    if obj is None:
+        raise ToolError("not_found", f"object not found: {name}", {"name": name})
+    bpy.data.objects.remove(obj, do_unlink=True)
+    return {"name": name, "deleted": True}
+
+
+def _object_set_transform(args: JSON) -> JSON:
+    name = args.get("name")
+    if not isinstance(name, str) or not name:
+        raise ToolError("invalid_arguments", "name must be a non-empty string")
+    obj = bpy.data.objects.get(name)
+    if obj is None:
+        raise ToolError("not_found", f"object not found: {name}", {"name": name})
+
+    if "location" in args:
+        obj.location = _vec3(args.get("location"), "location")
+    if "rotation_euler" in args:
+        obj.rotation_euler = _vec3(args.get("rotation_euler"), "rotation_euler")
+    if "scale" in args:
+        obj.scale = _vec3(args.get("scale"), "scale")
+
+    return {
+        "name": obj.name,
+        "location": [float(obj.location[0]), float(obj.location[1]), float(obj.location[2])],
+        "rotation_euler": [
+            float(obj.rotation_euler[0]),
+            float(obj.rotation_euler[1]),
+            float(obj.rotation_euler[2]),
+        ],
+        "scale": [float(obj.scale[0]), float(obj.scale[1]), float(obj.scale[2])],
+    }
+
+
+def _object_get_transform(args: JSON) -> JSON:
+    name = args.get("name")
+    if not isinstance(name, str) or not name:
+        raise ToolError("invalid_arguments", "name must be a non-empty string")
+    obj = bpy.data.objects.get(name)
+    if obj is None:
+        raise ToolError("not_found", f"object not found: {name}", {"name": name})
+    return {
+        "name": obj.name,
+        "location": [float(obj.location[0]), float(obj.location[1]), float(obj.location[2])],
+        "rotation_euler": [
+            float(obj.rotation_euler[0]),
+            float(obj.rotation_euler[1]),
+            float(obj.rotation_euler[2]),
+        ],
+        "scale": [float(obj.scale[0]), float(obj.scale[1]), float(obj.scale[2])],
+    }
 
 
 def _object_exists(args: JSON) -> JSON:
@@ -184,6 +380,13 @@ def _batch(args: JSON) -> JSON:
         "blender.object.exists",
         "blender.object.get_location",
         "blender.scene.get_active_object",
+        "blender.mesh.create_cube",
+        "blender.mesh.create_uv_sphere",
+        "blender.mesh.create_cylinder",
+        "blender.object.rename",
+        "blender.object.delete",
+        "blender.object.set_transform",
+        "blender.object.get_transform",
     }
 
     def _step_error(tool_name: str, code: str, message: str, details: Optional[JSON] = None) -> JSON:
@@ -268,6 +471,20 @@ def _dispatch_tool(name: str, args: JSON) -> JSON:
         return _object_get_location(args)
     if name == "blender.scene.get_active_object":
         return _scene_get_active_object()
+    if name == "blender.mesh.create_cube":
+        return _mesh_create_cube(args)
+    if name == "blender.mesh.create_uv_sphere":
+        return _mesh_create_uv_sphere(args)
+    if name == "blender.mesh.create_cylinder":
+        return _mesh_create_cylinder(args)
+    if name == "blender.object.rename":
+        return _object_rename(args)
+    if name == "blender.object.delete":
+        return _object_delete(args)
+    if name == "blender.object.set_transform":
+        return _object_set_transform(args)
+    if name == "blender.object.get_transform":
+        return _object_get_transform(args)
     if name == "blender.batch":
         return _batch(args)
     raise ValueError(f"Unknown tool: {name}")

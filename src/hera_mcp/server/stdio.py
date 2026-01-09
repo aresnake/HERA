@@ -104,6 +104,115 @@ TOOL_SCHEMAS: Dict[str, JSON] = {
         "error_schema": ERROR_SCHEMA,
         "version": SCHEMA_VERSION,
     },
+    "hera.blender.mesh.create_cube": {
+        "input_schema": _schema_obj(
+            {
+                "name": {"type": "string"},
+                "size": {"type": "number"},
+                "location": _schema_array_numbers3(),
+            }
+        ),
+        "output_schema": _schema_obj(
+            {
+                "name": {"type": "string"},
+                "created": {"type": "boolean"},
+                "location": _schema_array_numbers3(),
+            },
+            required=["name", "created", "location"],
+        ),
+        "error_schema": ERROR_SCHEMA,
+        "version": SCHEMA_VERSION,
+    },
+    "hera.blender.mesh.create_uv_sphere": {
+        "input_schema": _schema_obj(
+            {
+                "name": {"type": "string"},
+                "radius": {"type": "number"},
+                "segments": {"type": "integer"},
+                "rings": {"type": "integer"},
+                "location": _schema_array_numbers3(),
+            }
+        ),
+        "output_schema": _schema_obj(
+            {
+                "name": {"type": "string"},
+                "created": {"type": "boolean"},
+                "location": _schema_array_numbers3(),
+            },
+            required=["name", "created", "location"],
+        ),
+        "error_schema": ERROR_SCHEMA,
+        "version": SCHEMA_VERSION,
+    },
+    "hera.blender.mesh.create_cylinder": {
+        "input_schema": _schema_obj(
+            {
+                "name": {"type": "string"},
+                "radius": {"type": "number"},
+                "depth": {"type": "number"},
+                "vertices": {"type": "integer"},
+                "location": _schema_array_numbers3(),
+            }
+        ),
+        "output_schema": _schema_obj(
+            {
+                "name": {"type": "string"},
+                "created": {"type": "boolean"},
+                "location": _schema_array_numbers3(),
+            },
+            required=["name", "created", "location"],
+        ),
+        "error_schema": ERROR_SCHEMA,
+        "version": SCHEMA_VERSION,
+    },
+    "hera.blender.object.rename": {
+        "input_schema": _schema_obj({"from": {"type": "string"}, "to": {"type": "string"}}, required=["from", "to"]),
+        "output_schema": _schema_obj({"from": {"type": "string"}, "to": {"type": "string"}}, required=["from", "to"]),
+        "error_schema": ERROR_SCHEMA,
+        "version": SCHEMA_VERSION,
+    },
+    "hera.blender.object.delete": {
+        "input_schema": _schema_obj({"name": {"type": "string"}}, required=["name"]),
+        "output_schema": _schema_obj({"name": {"type": "string"}, "deleted": {"type": "boolean"}}, required=["name", "deleted"]),
+        "error_schema": ERROR_SCHEMA,
+        "version": SCHEMA_VERSION,
+    },
+    "hera.blender.object.set_transform": {
+        "input_schema": _schema_obj(
+            {
+                "name": {"type": "string"},
+                "location": _schema_array_numbers3(),
+                "rotation_euler": _schema_array_numbers3(),
+                "scale": _schema_array_numbers3(),
+            },
+            required=["name"],
+        ),
+        "output_schema": _schema_obj(
+            {
+                "name": {"type": "string"},
+                "location": _schema_array_numbers3(),
+                "rotation_euler": _schema_array_numbers3(),
+                "scale": _schema_array_numbers3(),
+            },
+            required=["name", "location", "rotation_euler", "scale"],
+        ),
+        "error_schema": ERROR_SCHEMA,
+        "version": SCHEMA_VERSION,
+    },
+    "hera.blender.object.get_transform": {
+        "input_schema": _schema_obj({"name": {"type": "string"}}, required=["name"]),
+        "output_schema": _schema_obj(
+            {
+                "name": {"type": "string"},
+                "location": _schema_array_numbers3(),
+                "rotation_euler": _schema_array_numbers3(),
+                "scale": _schema_array_numbers3(),
+            },
+            required=["name", "location", "rotation_euler", "scale"],
+        ),
+        "error_schema": ERROR_SCHEMA,
+        "version": SCHEMA_VERSION,
+    },
     "hera.blender.batch": {
         "input_schema": _schema_obj(
             {
@@ -238,6 +347,41 @@ def _tool_specs() -> list[JSON]:
             "inputSchema": TOOL_SCHEMAS["hera.blender.scene.get_active_object"]["input_schema"],
         },
         {
+            "name": "hera.blender.mesh.create_cube",
+            "description": "Create a cube mesh (proxy).",
+            "inputSchema": TOOL_SCHEMAS["hera.blender.mesh.create_cube"]["input_schema"],
+        },
+        {
+            "name": "hera.blender.mesh.create_uv_sphere",
+            "description": "Create a UV sphere mesh (proxy).",
+            "inputSchema": TOOL_SCHEMAS["hera.blender.mesh.create_uv_sphere"]["input_schema"],
+        },
+        {
+            "name": "hera.blender.mesh.create_cylinder",
+            "description": "Create a cylinder mesh (proxy).",
+            "inputSchema": TOOL_SCHEMAS["hera.blender.mesh.create_cylinder"]["input_schema"],
+        },
+        {
+            "name": "hera.blender.object.rename",
+            "description": "Rename a Blender object (proxy).",
+            "inputSchema": TOOL_SCHEMAS["hera.blender.object.rename"]["input_schema"],
+        },
+        {
+            "name": "hera.blender.object.delete",
+            "description": "Delete a Blender object (proxy).",
+            "inputSchema": TOOL_SCHEMAS["hera.blender.object.delete"]["input_schema"],
+        },
+        {
+            "name": "hera.blender.object.set_transform",
+            "description": "Set object transform values (proxy).",
+            "inputSchema": TOOL_SCHEMAS["hera.blender.object.set_transform"]["input_schema"],
+        },
+        {
+            "name": "hera.blender.object.get_transform",
+            "description": "Get object transform values (proxy).",
+            "inputSchema": TOOL_SCHEMAS["hera.blender.object.get_transform"]["input_schema"],
+        },
+        {
             "name": "hera.blender.batch",
             "description": "Run a batch of Blender tool calls (proxy).",
             "inputSchema": TOOL_SCHEMAS["hera.blender.batch"]["input_schema"],
@@ -328,6 +472,20 @@ def _handle_tools_call(params: JSON) -> JSON:
         return _call_proxy("blender.object.get_location", args)
     if name == "hera.blender.scene.get_active_object":
         return _call_proxy("blender.scene.get_active_object", {})
+    if name == "hera.blender.mesh.create_cube":
+        return _call_proxy("blender.mesh.create_cube", args)
+    if name == "hera.blender.mesh.create_uv_sphere":
+        return _call_proxy("blender.mesh.create_uv_sphere", args)
+    if name == "hera.blender.mesh.create_cylinder":
+        return _call_proxy("blender.mesh.create_cylinder", args)
+    if name == "hera.blender.object.rename":
+        return _call_proxy("blender.object.rename", args)
+    if name == "hera.blender.object.delete":
+        return _call_proxy("blender.object.delete", args)
+    if name == "hera.blender.object.set_transform":
+        return _call_proxy("blender.object.set_transform", args)
+    if name == "hera.blender.object.get_transform":
+        return _call_proxy("blender.object.get_transform", args)
     if name == "hera.blender.batch":
         return _call_proxy("blender.batch", args)
 

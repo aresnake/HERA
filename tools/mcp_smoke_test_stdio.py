@@ -108,6 +108,13 @@ def main() -> None:
         assert "hera.blender.object.get_location" in names
         assert "hera.blender.scene.get_active_object" in names
         assert "hera.blender.batch" in names
+        assert "hera.blender.mesh.create_cube" in names
+        assert "hera.blender.mesh.create_uv_sphere" in names
+        assert "hera.blender.mesh.create_cylinder" in names
+        assert "hera.blender.object.rename" in names
+        assert "hera.blender.object.delete" in names
+        assert "hera.blender.object.set_transform" in names
+        assert "hera.blender.object.get_transform" in names
         assert "hera.ping" in names
         assert "hera.blender.version" in names
         assert "hera.blender.scene.list_objects" in names
@@ -152,6 +159,47 @@ def main() -> None:
         move_json = move_resp.get("result", {}).get("content", [{}])[0].get("json", {})
         assert move_json.get("name") == "Cube", move_resp
         assert move_json.get("location") == [1.0, 2.0, 3.0], move_resp
+
+        _send(
+            p,
+            {
+                "jsonrpc": "2.0",
+                "id": 12,
+                "method": "tools/call",
+                "params": {
+                    "name": "hera.blender.batch",
+                    "arguments": {
+                        "steps": [
+                            {
+                                "tool": "hera.blender.mesh.create_cube",
+                                "args": {"name": "BatchCube", "size": 1.0, "location": [0, 0, 0]},
+                            },
+                            {
+                                "tool": "hera.blender.object.move",
+                                "args": {"name": "BatchCube", "location": [1, 2, 3]},
+                            },
+                            {
+                                "tool": "hera.blender.object.get_location",
+                                "args": {"name": "BatchCube"},
+                            },
+                            {
+                                "tool": "hera.blender.object.exists",
+                                "args": {"name": "BatchCube"},
+                            },
+                            {
+                                "tool": "hera.blender.object.delete",
+                                "args": {"name": "BatchCube"},
+                            },
+                        ]
+                    },
+                },
+            },
+        )
+        batch_resp2 = _recv(out_q, timeout_s=15.0)
+        batch_json2 = batch_resp2.get("result", {}).get("content", [{}])[0].get("json", {})
+        batch_results2 = batch_json2.get("results") or []
+        assert len(batch_results2) == 5, batch_resp2
+        assert all(r.get("ok") is True for r in batch_results2), batch_resp2
 
         _send(
             p,

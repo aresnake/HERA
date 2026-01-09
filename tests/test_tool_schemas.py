@@ -206,6 +206,21 @@ def test_tool_schema_registry_and_validation():
         )
         batch_payload = _content_json(batch_resp)
         _validate(schema_map["hera.blender.batch"]["output_schema"], batch_payload)
+
+        cube_resp = _run(
+            {
+                "jsonrpc": "2.0",
+                "id": 6,
+                "method": "tools/call",
+                "params": {
+                    "name": "hera.blender.mesh.create_cube",
+                    "arguments": {"name": "SchemaCube", "size": 1.0, "location": [0, 0, 0]},
+                },
+            },
+            env=env,
+        )
+        cube_payload = _content_json(cube_resp)
+        _validate(schema_map["hera.blender.mesh.create_cube"]["output_schema"], cube_payload)
     finally:
         if p.poll() is None:
             p.terminate()
