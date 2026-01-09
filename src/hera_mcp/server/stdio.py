@@ -9,6 +9,146 @@ from hera_mcp.tools.blender_client import call_tool, wait_worker
 
 JSON = Dict[str, Any]
 
+SCHEMA_DRAFT = "http://json-schema.org/draft-07/schema#"
+SCHEMA_VERSION = "1.0"
+
+
+def _schema_obj(properties: JSON, required: Optional[list[str]] = None) -> JSON:
+    return {
+        "$schema": SCHEMA_DRAFT,
+        "type": "object",
+        "properties": properties,
+        "required": required or [],
+        "additionalProperties": False,
+    }
+
+
+def _schema_array_numbers3() -> JSON:
+    return {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3}
+
+
+ERROR_SCHEMA = _schema_obj(
+    {
+        "code": {"type": "string"},
+        "message": {"type": "string"},
+        "details": {"type": "object"},
+    },
+    required=["code", "message"],
+)
+
+TOOL_SCHEMAS: Dict[str, JSON] = {
+    "hera.ping": {
+        "input_schema": _schema_obj({}),
+        "output_schema": _schema_obj({"pong": {"type": "boolean"}}, required=["pong"]),
+        "error_schema": ERROR_SCHEMA,
+        "version": SCHEMA_VERSION,
+    },
+    "hera.blender.version": {
+        "input_schema": _schema_obj({}),
+        "output_schema": _schema_obj(
+            {
+                "blender_version": {"type": "string"},
+                "build_date": {"type": ["string", "null"]},
+                "hash": {"type": ["string", "null"]},
+            },
+            required=["blender_version", "build_date", "hash"],
+        ),
+        "error_schema": ERROR_SCHEMA,
+        "version": SCHEMA_VERSION,
+    },
+    "hera.blender.scene.list_objects": {
+        "input_schema": _schema_obj({}),
+        "output_schema": _schema_obj(
+            {
+                "objects": {"type": "array", "items": {"type": "string"}},
+                "count": {"type": "integer"},
+            },
+            required=["objects", "count"],
+        ),
+        "error_schema": ERROR_SCHEMA,
+        "version": SCHEMA_VERSION,
+    },
+    "hera.blender.object.move": {
+        "input_schema": _schema_obj(
+            {"name": {"type": "string"}, "location": _schema_array_numbers3()},
+            required=["name", "location"],
+        ),
+        "output_schema": _schema_obj(
+            {"name": {"type": "string"}, "location": _schema_array_numbers3()},
+            required=["name", "location"],
+        ),
+        "error_schema": ERROR_SCHEMA,
+        "version": SCHEMA_VERSION,
+    },
+    "hera.blender.object.exists": {
+        "input_schema": _schema_obj({"name": {"type": "string"}}, required=["name"]),
+        "output_schema": _schema_obj(
+            {"name": {"type": "string"}, "exists": {"type": "boolean"}},
+            required=["name", "exists"],
+        ),
+        "error_schema": ERROR_SCHEMA,
+        "version": SCHEMA_VERSION,
+    },
+    "hera.blender.object.get_location": {
+        "input_schema": _schema_obj({"name": {"type": "string"}}, required=["name"]),
+        "output_schema": _schema_obj(
+            {"name": {"type": "string"}, "location": _schema_array_numbers3()},
+            required=["name", "location"],
+        ),
+        "error_schema": ERROR_SCHEMA,
+        "version": SCHEMA_VERSION,
+    },
+    "hera.blender.scene.get_active_object": {
+        "input_schema": _schema_obj({}),
+        "output_schema": _schema_obj({"name": {"type": ["string", "null"]}}, required=["name"]),
+        "error_schema": ERROR_SCHEMA,
+        "version": SCHEMA_VERSION,
+    },
+    "hera.list_objects": {
+        "input_schema": _schema_obj({}),
+        "output_schema": _schema_obj(
+            {
+                "objects": {"type": "array", "items": {"type": "string"}},
+                "count": {"type": "integer"},
+            },
+            required=["objects", "count"],
+        ),
+        "error_schema": ERROR_SCHEMA,
+        "version": SCHEMA_VERSION,
+    },
+    "hera.create_cube": {
+        "input_schema": _schema_obj({"name": {"type": "string"}, "size": {"type": "number"}}),
+        "output_schema": _schema_obj({"name": {"type": "string"}}, required=["name"]),
+        "error_schema": ERROR_SCHEMA,
+        "version": SCHEMA_VERSION,
+    },
+    "hera.fail": {
+        "input_schema": _schema_obj({}),
+        "output_schema": _schema_obj({}),
+        "error_schema": ERROR_SCHEMA,
+        "version": SCHEMA_VERSION,
+    },
+    "hera.meta.tools.describe": {
+        "input_schema": _schema_obj({}),
+        "output_schema": {
+            "$schema": SCHEMA_DRAFT,
+            "type": "array",
+            "items": _schema_obj(
+                {
+                    "name": {"type": "string"},
+                    "input_schema": {"type": "object"},
+                    "output_schema": {"type": "object"},
+                    "error_schema": {"type": "object"},
+                    "version": {"type": "string"},
+                },
+                required=["name", "input_schema", "output_schema", "error_schema", "version"],
+            ),
+        },
+        "error_schema": ERROR_SCHEMA,
+        "version": SCHEMA_VERSION,
+    },
+}
+
 
 def _write(obj: JSON) -> None:
     sys.stdout.write(json.dumps(obj, ensure_ascii=False) + "\n")
@@ -31,74 +171,57 @@ def _tool_specs() -> list[JSON]:
         {
             "name": "hera.ping",
             "description": "Local ping (does not require Blender).",
-            "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
+            "inputSchema": TOOL_SCHEMAS["hera.ping"]["input_schema"],
         },
         {
             "name": "hera.blender.version",
             "description": "Return Blender version and build info (proxy).",
-            "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
+            "inputSchema": TOOL_SCHEMAS["hera.blender.version"]["input_schema"],
         },
         {
             "name": "hera.blender.scene.list_objects",
             "description": "List objects in the current Blender scene (proxy).",
-            "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
+            "inputSchema": TOOL_SCHEMAS["hera.blender.scene.list_objects"]["input_schema"],
         },
         {
             "name": "hera.blender.object.move",
             "description": "Move a Blender object by name (proxy).",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "name": {"type": "string"},
-                    "location": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
-                },
-                "required": ["name", "location"],
-                "additionalProperties": False,
-            },
+            "inputSchema": TOOL_SCHEMAS["hera.blender.object.move"]["input_schema"],
         },
         {
             "name": "hera.blender.object.exists",
             "description": "Check if a Blender object exists by name (proxy).",
-            "inputSchema": {
-                "type": "object",
-                "properties": {"name": {"type": "string"}},
-                "required": ["name"],
-                "additionalProperties": False,
-            },
+            "inputSchema": TOOL_SCHEMAS["hera.blender.object.exists"]["input_schema"],
         },
         {
             "name": "hera.blender.object.get_location",
             "description": "Get a Blender object's location by name (proxy).",
-            "inputSchema": {
-                "type": "object",
-                "properties": {"name": {"type": "string"}},
-                "required": ["name"],
-                "additionalProperties": False,
-            },
+            "inputSchema": TOOL_SCHEMAS["hera.blender.object.get_location"]["input_schema"],
         },
         {
             "name": "hera.blender.scene.get_active_object",
             "description": "Get the active object in Blender (proxy).",
-            "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
+            "inputSchema": TOOL_SCHEMAS["hera.blender.scene.get_active_object"]["input_schema"],
+        },
+        {
+            "name": "hera.meta.tools.describe",
+            "description": "Describe tool schemas and versions (local).",
+            "inputSchema": TOOL_SCHEMAS["hera.meta.tools.describe"]["input_schema"],
         },
         {
             "name": "hera.list_objects",
             "description": "List objects in the current Blender scene (proxy).",
-            "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
+            "inputSchema": TOOL_SCHEMAS["hera.list_objects"]["input_schema"],
         },
         {
             "name": "hera.create_cube",
             "description": "Create a cube in Blender (proxy).",
-            "inputSchema": {
-                "type": "object",
-                "properties": {"name": {"type": "string"}, "size": {"type": "number"}},
-                "additionalProperties": False,
-            },
+            "inputSchema": TOOL_SCHEMAS["hera.create_cube"]["input_schema"],
         },
         {
             "name": "hera.fail",
             "description": "Always fails (local), used to test error normalization.",
-            "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
+            "inputSchema": TOOL_SCHEMAS["hera.fail"]["input_schema"],
         },
     ]
 
@@ -130,6 +253,20 @@ def _handle_tools_call(params: JSON) -> JSON:
     # ✅ Local ping (NO Blender dependency) — required by tests
     if name == "hera.ping":
         return {"ok": True, "result": {"pong": True}}
+
+    if name == "hera.meta.tools.describe":
+        payload = []
+        for tool_name, schema in TOOL_SCHEMAS.items():
+            payload.append(
+                {
+                    "name": tool_name,
+                    "input_schema": schema["input_schema"],
+                    "output_schema": schema["output_schema"],
+                    "error_schema": schema["error_schema"],
+                    "version": schema["version"],
+                }
+            )
+        return {"ok": True, "result": payload}
 
     # Local forced error (must NOT require Blender)
     if name == "hera.fail":
