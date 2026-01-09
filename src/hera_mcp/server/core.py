@@ -1,11 +1,7 @@
 from __future__ import annotations
 
-import json
-import sys
-import traceback
 from typing import Any, Dict, Optional
 
-from hera_mcp.server import core
 from hera_mcp.tools.blender_client import call_tool, wait_worker
 
 JSON = Dict[str, Any]
@@ -294,22 +290,6 @@ TOOL_SCHEMAS: Dict[str, JSON] = {
 }
 
 
-def _write(obj: JSON) -> None:
-    sys.stdout.write(json.dumps(obj, ensure_ascii=False) + "\n")
-    sys.stdout.flush()
-
-
-def _err(req_id: Any, code: str, message: str, data: Optional[JSON] = None) -> JSON:
-    e: JSON = {"code": code, "message": message}
-    if data is not None:
-        e["data"] = data
-    return {"jsonrpc": "2.0", "id": req_id, "error": e}
-
-
-def _ok(req_id: Any, result: Any) -> JSON:
-    return {"jsonrpc": "2.0", "id": req_id, "result": result}
-
-
 def _tool_specs() -> list[JSON]:
     return [
         {
@@ -410,7 +390,18 @@ def _tool_specs() -> list[JSON]:
     ]
 
 
+def _in_blender() -> bool:
+    try:
+        import bpy  # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
 def _call_proxy(tool_name: str, args: JSON) -> JSON:
+    if _in_blender():
+        from hera_mcp.tools import blender_ui_impl
+        return blender_ui_impl.call(tool_name, args)
     try:
         wait_worker(timeout_s=5.0)
         return call_tool(tool_name, args)
@@ -434,7 +425,6 @@ def _handle_tools_call(params: JSON) -> JSON:
     if not isinstance(args, dict):
         return {"ok": False, "error": {"code": "invalid_request", "message": "arguments must be an object"}}
 
-    # ✅ Local ping (NO Blender dependency) — required by tests
     if name == "hera.ping":
         return {"ok": True, "result": {"pong": True}}
 
@@ -452,11 +442,9 @@ def _handle_tools_call(params: JSON) -> JSON:
             )
         return {"ok": True, "result": payload}
 
-    # Local forced error (must NOT require Blender)
     if name == "hera.fail":
         return {"ok": False, "error": {"code": "forced_error", "message": "forced failure for tests"}}
 
-    # Proxy tools
     if name == "hera.list_objects":
         return _call_proxy("list_objects", {})
     if name == "hera.create_cube":
@@ -493,96 +481,20 @@ def _handle_tools_call(params: JSON) -> JSON:
     return {"ok": False, "error": {"code": "unknown_tool", "message": f"Unknown tool: {name}"}}
 
 
-def main() -> None:
-    for line in sys.stdin:
-        raw = (line or "").strip()
-        if not raw:
-            continue
+def handle(message: JSON) -> JSON:
+    if not isinstance(message, dict):
+        return {"ok": False, "error": {"code": "invalid_request", "message": "message must be an object"}}
 
-        try:
-            req = json.loads(raw)
-        except Exception:
-            _write(_err(None, "parse_error", "Invalid JSON"))
-            continue
+    msg_type = message.get("type")
+    if not isinstance(msg_type, str) or not msg_type:
+        return {"ok": False, "error": {"code": "invalid_request", "message": "missing type"}}
 
-        req_id = req.get("id", None)
-        method = req.get("method")
-        params = req.get("params") or {}
+    if msg_type == "tools/list":
+        return {"ok": True, "result": {"tools": _tool_specs()}}
 
-        try:
-            if method == "initialize":
-                result = {
-                    "protocolVersion": params.get("protocolVersion", "2024-11-05"),
-                    "capabilities": {"tools": {}},
-                    "serverInfo": {"name": "hera-mcp", "version": "0.0.1"},
-                }
-                _write(_ok(req_id, result))
-                continue
+    if msg_type == "tools/call":
+        name = message.get("name")
+        args = message.get("args") or {}
+        return _handle_tools_call({"name": name, "arguments": args})
 
-            if method == "tools/list":
-                res = core.handle({"type": "tools/list"})
-                if res.get("ok") is True:
-                    _write(_ok(req_id, res.get("result", {})))
-                else:
-                    err = res.get("error") or {}
-                    _write(_err(req_id, err.get("code", "execution_error"), err.get("message", "error"), {"raw": err}))
-                continue
-
-            if method == "tools/call":
-                msg = {"type": "tools/call", "name": params.get("name"), "args": params.get("arguments") or {}}
-                call_res = core.handle(msg)
-                if call_res.get("ok") is True:
-                    _write(_ok(req_id, {"content": [{"type": "text", "json": call_res.get("result", {})}]}))
-                else:
-                    err = call_res.get("error") or {}
-                    _write(_err(req_id, err.get("code", "execution_error"), err.get("message", "error"), {"raw": err}))
-                continue
-
-            _write(_err(req_id, "method_not_found", f"Unknown method: {method}"))
-
-        except Exception as exc:
-            _write(_err(req_id, "internal_error", str(exc), {"traceback": traceback.format_exc()}))
-
-
-if __name__ == "__main__":
-    main()
-
-def get_tool_schemas():
-    """
-    Public, stable accessor for tool schemas.
-    Returns {} if schemas are not globally exposed (still OK for basic routing).
-    """
-    for name in ("TOOL_SCHEMAS", "SCHEMAS", "_TOOL_SCHEMAS", "_SCHEMAS"):
-        v = globals().get(name)
-        if isinstance(v, dict):
-            return v
-    return {}
-
-
-def handle_message(message: dict):
-    """
-    Public, stable MCP handler: takes a decoded JSON dict and returns a JSON dict.
-    This lets socket/other transports reuse stdio logic without importing internals.
-    """
-    # Try common internal handler names (keeps us resilient to refactors)
-    candidates = (
-        "_handle_message",
-        "process_message",
-        "_process_message",
-        "dispatch_message",
-        "_dispatch_message",
-        "dispatch",
-        "_dispatch",
-        "handle_request",
-        "_handle_request",
-    )
-
-    for name in candidates:
-        fn = globals().get(name)
-        if callable(fn):
-            return fn(message)
-
-    raise RuntimeError(
-        "stdio.py: no internal handler found. "
-        "Expected one of: " + ", ".join(candidates)
-    )
+    return {"ok": False, "error": {"code": "method_not_found", "message": f"Unknown type: {msg_type}"}}
