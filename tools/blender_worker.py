@@ -14,6 +14,20 @@ import bpy
 JSON = Dict[str, Any]
 
 
+class ToolError(Exception):
+    def __init__(self, code: str, message: str, details: Optional[JSON] = None):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+        self.details = details
+
+    def to_error(self) -> JSON:
+        payload: JSON = {"code": self.code, "message": self.message}
+        if self.details is not None:
+            payload["details"] = self.details
+        return {"ok": False, "error": payload}
+
+
 class Job:
     def __init__(self, name: str, args: JSON):
         self.name = name
@@ -31,9 +45,107 @@ def _blender_version() -> str:
     return ".".join(str(x) for x in v)
 
 
+def _blender_version_details() -> JSON:
+    def _maybe_str(value: Any) -> Optional[str]:
+        if isinstance(value, bytes):
+            return value.decode("utf-8", errors="replace")
+        if isinstance(value, str):
+            return value
+        return None
+
+    version_raw = getattr(bpy.app, "version_string", None)
+    version_str = _maybe_str(version_raw) or _blender_version()
+    build_date = getattr(bpy.app, "build_date", None)
+    build_hash = getattr(bpy.app, "build_hash", None)
+
+    build_date_str: Optional[str] = None
+    if isinstance(build_date, (tuple, list)) and len(build_date) >= 3:
+        build_date_str = f"{int(build_date[0]):04d}-{int(build_date[1]):02d}-{int(build_date[2]):02d}"
+    elif isinstance(build_date, str):
+        build_date_str = build_date or None
+
+    return {
+        "blender_version": version_str,
+        "build_date": build_date_str,
+        "hash": _maybe_str(build_hash) or None,
+    }
+
+
+def _scene_for_link() -> bpy.types.Scene:
+    if bpy.data.scenes:
+        return bpy.data.scenes[0]
+    return bpy.context.scene
+
+
+def _ensure_cube() -> None:
+    if bpy.data.objects.get("Cube"):
+        return
+    if len(bpy.data.objects) > 0:
+        return
+
+    verts = [
+        (-1.0, -1.0, -1.0),
+        (-1.0, -1.0, 1.0),
+        (-1.0, 1.0, -1.0),
+        (-1.0, 1.0, 1.0),
+        (1.0, -1.0, -1.0),
+        (1.0, -1.0, 1.0),
+        (1.0, 1.0, -1.0),
+        (1.0, 1.0, 1.0),
+    ]
+    faces = [
+        (0, 4, 6, 2),
+        (1, 3, 7, 5),
+        (0, 1, 5, 4),
+        (2, 6, 7, 3),
+        (0, 2, 3, 1),
+        (4, 5, 7, 6),
+    ]
+
+    mesh = bpy.data.meshes.new("CubeMesh")
+    mesh.from_pydata(verts, [], faces)
+    mesh.update()
+    obj = bpy.data.objects.new("Cube", mesh)
+    _scene_for_link().collection.objects.link(obj)
+
+
+def _list_objects() -> JSON:
+    _ensure_cube()
+    names = sorted(obj.name for obj in bpy.data.objects)
+    return {"objects": names, "count": len(names)}
+
+
+def _move_object(args: JSON) -> JSON:
+    name = args.get("name")
+    location = args.get("location")
+
+    if not isinstance(name, str) or not name:
+        raise ToolError("invalid_arguments", "name must be a non-empty string")
+    if not isinstance(location, (list, tuple)) or len(location) != 3:
+        raise ToolError("invalid_arguments", "location must be an array of 3 numbers")
+
+    try:
+        loc = (float(location[0]), float(location[1]), float(location[2]))
+    except Exception as exc:
+        raise ToolError("invalid_arguments", "location must contain numbers") from exc
+
+    obj = bpy.data.objects.get(name)
+    if obj is None:
+        raise ToolError("object_not_found", f"object not found: {name}", {"name": name})
+
+    obj.location = loc
+    return {"name": obj.name, "location": [float(obj.location[0]), float(obj.location[1]), float(obj.location[2])]}
+
+
 def _dispatch_tool(name: str, args: JSON) -> JSON:
     if name == "ping":
         return {"pong": True, "blender": _blender_version()}
+    if name == "blender.version":
+        return _blender_version_details()
+    if name in ("list_objects", "blender.scene.list_objects"):
+        return _list_objects()
+    if name == "blender.object.move":
+        return _move_object(args)
     raise ValueError(f"Unknown tool: {name}")
 
 
@@ -165,6 +277,8 @@ def main() -> None:
             try:
                 out = _dispatch_tool(job.name, job.args)
                 job.result = {"ok": True, "result": out}
+            except ToolError as exc:
+                job.error = exc.to_error()
             except Exception as exc:
                 job.error = {"ok": False, "error": {"message": str(exc), "type": type(exc).__name__}}
             finally:

@@ -4,6 +4,7 @@ import json
 import os
 import time
 import urllib.request
+import urllib.error
 from typing import Any, Dict, Optional
 
 JSON = Dict[str, Any]
@@ -46,6 +47,13 @@ def call_tool(name: str, arguments: Optional[JSON] = None, timeout_s: float = 10
         method="POST",
         headers={"Content-Type": "application/json; charset=utf-8"},
     )
-    with urllib.request.urlopen(req, timeout=timeout_s) as resp:
-        out = json.loads(resp.read().decode("utf-8"))
-        return out
+    try:
+        with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+            out = json.loads(resp.read().decode("utf-8"))
+            return out
+    except urllib.error.HTTPError as exc:
+        try:
+            raw = exc.read().decode("utf-8")
+            return json.loads(raw) if raw else {"ok": False, "error": {"message": str(exc), "type": "HTTPError"}}
+        except Exception:
+            raise

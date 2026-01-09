@@ -102,13 +102,67 @@ def main() -> None:
         assert list_resp.get("id") == 2, list_resp
         assert "result" in list_resp, list_resp
 
-        # ✅ namespaced
+        tools = list_resp["result"]["tools"]
+        names = [t.get("name") for t in tools]
+        assert "hera.ping" in names
+        assert "hera.blender.version" in names
+        assert "hera.blender.scene.list_objects" in names
+        assert "hera.blender.object.move" in names
+
         _send(p, {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "hera.ping", "arguments": {}}})
         ping_resp = _recv(out_q, timeout_s=15.0)
         assert ping_resp.get("id") == 3, ping_resp
         assert ping_resp.get("result", {}).get("content") is not None, ping_resp
 
-        print("[smoke] OK initialize + tools/list + tools/call(hera.ping)")
+        _send(
+            p,
+            {"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "hera.blender.version", "arguments": {}}},
+        )
+        ver_resp = _recv(out_q, timeout_s=15.0)
+        ver_json = ver_resp.get("result", {}).get("content", [{}])[0].get("json", {})
+        assert "blender_version" in ver_json, ver_resp
+
+        _send(
+            p,
+            {
+                "jsonrpc": "2.0",
+                "id": 5,
+                "method": "tools/call",
+                "params": {"name": "hera.blender.scene.list_objects", "arguments": {}},
+            },
+        )
+        list_resp2 = _recv(out_q, timeout_s=15.0)
+        list_json = list_resp2.get("result", {}).get("content", [{}])[0].get("json", {})
+        assert "Cube" in list_json.get("objects", []), list_resp2
+
+        _send(
+            p,
+            {
+                "jsonrpc": "2.0",
+                "id": 6,
+                "method": "tools/call",
+                "params": {"name": "hera.blender.object.move", "arguments": {"name": "Cube", "location": [1, 2, 3]}},
+            },
+        )
+        move_resp = _recv(out_q, timeout_s=15.0)
+        move_json = move_resp.get("result", {}).get("content", [{}])[0].get("json", {})
+        assert move_json.get("name") == "Cube", move_resp
+        assert move_json.get("location") == [1.0, 2.0, 3.0], move_resp
+
+        _send(
+            p,
+            {
+                "jsonrpc": "2.0",
+                "id": 7,
+                "method": "tools/call",
+                "params": {"name": "hera.blender.scene.list_objects", "arguments": {}},
+            },
+        )
+        list_resp3 = _recv(out_q, timeout_s=15.0)
+        list_json3 = list_resp3.get("result", {}).get("content", [{}])[0].get("json", {})
+        assert "Cube" in list_json3.get("objects", []), list_resp3
+
+        print("[smoke] OK initialize + tools/list + tools/call(hera.ping) + blender tools")
 
     finally:
         try:

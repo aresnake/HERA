@@ -34,6 +34,29 @@ def _tool_specs() -> list[JSON]:
             "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
         },
         {
+            "name": "hera.blender.version",
+            "description": "Return Blender version and build info (proxy).",
+            "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
+        },
+        {
+            "name": "hera.blender.scene.list_objects",
+            "description": "List objects in the current Blender scene (proxy).",
+            "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
+        },
+        {
+            "name": "hera.blender.object.move",
+            "description": "Move a Blender object by name (proxy).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "location": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
+                },
+                "required": ["name", "location"],
+                "additionalProperties": False,
+            },
+        },
+        {
             "name": "hera.list_objects",
             "description": "List objects in the current Blender scene (proxy).",
             "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
@@ -92,6 +115,12 @@ def _handle_tools_call(params: JSON) -> JSON:
         return _call_proxy("list_objects", {})
     if name == "hera.create_cube":
         return _call_proxy("create_cube", args)
+    if name == "hera.blender.version":
+        return _call_proxy("blender.version", {})
+    if name == "hera.blender.scene.list_objects":
+        return _call_proxy("blender.scene.list_objects", {})
+    if name == "hera.blender.object.move":
+        return _call_proxy("blender.object.move", args)
 
     return {"ok": False, "error": {"code": "unknown_tool", "message": f"Unknown tool: {name}"}}
 
