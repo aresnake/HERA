@@ -104,6 +104,40 @@ TOOL_SCHEMAS: Dict[str, JSON] = {
         "error_schema": ERROR_SCHEMA,
         "version": SCHEMA_VERSION,
     },
+    "hera.blender.batch": {
+        "input_schema": _schema_obj(
+            {
+                "steps": {
+                    "type": "array",
+                    "items": _schema_obj(
+                        {"tool": {"type": "string"}, "args": {"type": "object"}},
+                        required=["tool", "args"],
+                    ),
+                },
+                "continue_on_error": {"type": "boolean"},
+            },
+            required=["steps"],
+        ),
+        "output_schema": _schema_obj(
+            {
+                "results": {
+                    "type": "array",
+                    "items": _schema_obj(
+                        {
+                            "ok": {"type": "boolean"},
+                            "tool": {"type": "string"},
+                            "result": {},
+                            "error": {},
+                        },
+                        required=["ok", "tool"],
+                    ),
+                }
+            },
+            required=["results"],
+        ),
+        "error_schema": ERROR_SCHEMA,
+        "version": SCHEMA_VERSION,
+    },
     "hera.list_objects": {
         "input_schema": _schema_obj({}),
         "output_schema": _schema_obj(
@@ -204,6 +238,11 @@ def _tool_specs() -> list[JSON]:
             "inputSchema": TOOL_SCHEMAS["hera.blender.scene.get_active_object"]["input_schema"],
         },
         {
+            "name": "hera.blender.batch",
+            "description": "Run a batch of Blender tool calls (proxy).",
+            "inputSchema": TOOL_SCHEMAS["hera.blender.batch"]["input_schema"],
+        },
+        {
             "name": "hera.meta.tools.describe",
             "description": "Describe tool schemas and versions (local).",
             "inputSchema": TOOL_SCHEMAS["hera.meta.tools.describe"]["input_schema"],
@@ -289,6 +328,8 @@ def _handle_tools_call(params: JSON) -> JSON:
         return _call_proxy("blender.object.get_location", args)
     if name == "hera.blender.scene.get_active_object":
         return _call_proxy("blender.scene.get_active_object", {})
+    if name == "hera.blender.batch":
+        return _call_proxy("blender.batch", args)
 
     return {"ok": False, "error": {"code": "unknown_tool", "message": f"Unknown tool: {name}"}}
 

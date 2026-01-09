@@ -191,6 +191,21 @@ def test_tool_schema_registry_and_validation():
         )
         ver_payload = _content_json(ver_resp)
         _validate(schema_map["hera.blender.version"]["output_schema"], ver_payload)
+
+        batch_resp = _run(
+            {
+                "jsonrpc": "2.0",
+                "id": 5,
+                "method": "tools/call",
+                "params": {
+                    "name": "hera.blender.batch",
+                    "arguments": {"steps": [{"tool": "hera.blender.scene.list_objects", "args": {}}]},
+                },
+            },
+            env=env,
+        )
+        batch_payload = _content_json(batch_resp)
+        _validate(schema_map["hera.blender.batch"]["output_schema"], batch_payload)
     finally:
         if p.poll() is None:
             p.terminate()

@@ -168,6 +168,91 @@ def _scene_get_active_object() -> JSON:
     return {"name": obj.name}
 
 
+def _batch(args: JSON) -> JSON:
+    steps = args.get("steps")
+    continue_on_error = args.get("continue_on_error", False)
+
+    if not isinstance(steps, list):
+        raise ToolError("invalid_arguments", "steps must be an array")
+    if not isinstance(continue_on_error, bool):
+        raise ToolError("invalid_arguments", "continue_on_error must be a boolean")
+
+    allowed_internal = {
+        "blender.version",
+        "blender.scene.list_objects",
+        "blender.object.move",
+        "blender.object.exists",
+        "blender.object.get_location",
+        "blender.scene.get_active_object",
+    }
+
+    def _step_error(tool_name: str, code: str, message: str, details: Optional[JSON] = None) -> JSON:
+        err: JSON = {"code": code, "message": message}
+        if details is not None:
+            err["details"] = details
+        return {"ok": False, "tool": tool_name, "error": err}
+
+    results: list[JSON] = []
+    for idx, step in enumerate(steps):
+        if not isinstance(step, dict):
+            results.append(_step_error("<invalid>", "invalid_step", "step must be an object", {"index": idx}))
+            if not continue_on_error:
+                break
+            continue
+
+        tool_name = step.get("tool")
+        step_args = step.get("args") if "args" in step else {}
+
+        if not isinstance(tool_name, str) or not tool_name:
+            results.append(_step_error("<invalid>", "invalid_tool", "tool must be a non-empty string", {"index": idx}))
+            if not continue_on_error:
+                break
+            continue
+
+        if not tool_name.startswith("hera.blender.") or tool_name == "hera.blender.batch":
+            results.append(
+                _step_error(tool_name, "forbidden_tool", "tool not allowed in batch", {"tool": tool_name})
+            )
+            if not continue_on_error:
+                break
+            continue
+
+        if not isinstance(step_args, dict):
+            results.append(
+                _step_error(tool_name, "invalid_arguments", "args must be an object", {"tool": tool_name})
+            )
+            if not continue_on_error:
+                break
+            continue
+
+        internal_tool = tool_name.replace("hera.", "", 1)
+        if internal_tool not in allowed_internal:
+            results.append(_step_error(tool_name, "unknown_tool", "unknown tool", {"tool": tool_name}))
+            if not continue_on_error:
+                break
+            continue
+
+        try:
+            out = _dispatch_tool(internal_tool, step_args)
+            results.append({"ok": True, "tool": tool_name, "result": out})
+        except ToolError as exc:
+            results.append({"ok": False, "tool": tool_name, "error": exc.to_error().get("error")})
+            if not continue_on_error:
+                break
+        except Exception as exc:
+            results.append(
+                {
+                    "ok": False,
+                    "tool": tool_name,
+                    "error": {"message": str(exc), "type": type(exc).__name__},
+                }
+            )
+            if not continue_on_error:
+                break
+
+    return {"results": results}
+
+
 def _dispatch_tool(name: str, args: JSON) -> JSON:
     if name == "ping":
         return {"pong": True, "blender": _blender_version()}
@@ -183,6 +268,8 @@ def _dispatch_tool(name: str, args: JSON) -> JSON:
         return _object_get_location(args)
     if name == "blender.scene.get_active_object":
         return _scene_get_active_object()
+    if name == "blender.batch":
+        return _batch(args)
     raise ValueError(f"Unknown tool: {name}")
 
 

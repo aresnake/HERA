@@ -107,6 +107,7 @@ def main() -> None:
         assert "hera.blender.object.exists" in names
         assert "hera.blender.object.get_location" in names
         assert "hera.blender.scene.get_active_object" in names
+        assert "hera.blender.batch" in names
         assert "hera.ping" in names
         assert "hera.blender.version" in names
         assert "hera.blender.scene.list_objects" in names
@@ -151,6 +152,29 @@ def main() -> None:
         move_json = move_resp.get("result", {}).get("content", [{}])[0].get("json", {})
         assert move_json.get("name") == "Cube", move_resp
         assert move_json.get("location") == [1.0, 2.0, 3.0], move_resp
+
+        _send(
+            p,
+            {
+                "jsonrpc": "2.0",
+                "id": 11,
+                "method": "tools/call",
+                "params": {
+                    "name": "hera.blender.batch",
+                    "arguments": {
+                        "steps": [
+                            {"tool": "hera.blender.scene.list_objects", "args": {}},
+                            {"tool": "hera.blender.object.get_location", "args": {"name": "Cube"}},
+                        ]
+                    },
+                },
+            },
+        )
+        batch_resp = _recv(out_q, timeout_s=15.0)
+        batch_json = batch_resp.get("result", {}).get("content", [{}])[0].get("json", {})
+        batch_results = batch_json.get("results") or []
+        assert len(batch_results) == 2, batch_resp
+        assert all(r.get("ok") is True for r in batch_results), batch_resp
 
         _send(
             p,
