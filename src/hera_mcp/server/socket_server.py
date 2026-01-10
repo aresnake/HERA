@@ -58,23 +58,38 @@ async def handle_message(message: Dict[str, Any]) -> Dict[str, Any]:
 # -------------------------
 
 async def _client_loop(ws):
-    async for raw in ws:
-        try:
-            data = _json_loads(raw)
-        except Exception:
-            await ws.send(
-                _json_dumps(
-                    _error("invalid_json", "Payload is not valid JSON")
+    try:
+        async for raw in ws:
+            try:
+                data = _json_loads(raw)
+            except Exception:
+                await ws.send(
+                    _json_dumps(
+                        _error("invalid_json", "Payload is not valid JSON")
+                    )
                 )
-            )
-            continue
+                continue
 
-        # stdio peut être sync → on protège
-        result = handle_message(data)
-        if asyncio.iscoroutine(result):
-            result = await result
+            # stdio peut être sync → on protège
+            result = handle_message(data)
+            if asyncio.iscoroutine(result):
+                result = await result
 
-        await ws.send(_json_dumps(result))
+            await ws.send(_json_dumps(result))
+    except (ConnectionResetError, OSError):
+        # Client dropped the TCP connection (common on Windows).
+        return
+    except Exception as exc:
+        # If websockets closes without close frame, swallow quietly.
+        try:
+            from websockets.exceptions import ConnectionClosed
+            if isinstance(exc, ConnectionClosed):
+                return
+        except Exception:
+            pass
+        raise
+
+
 
 async def serve_socket(host: str = "127.0.0.1", port: int = 8765):
     """

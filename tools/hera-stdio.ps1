@@ -72,7 +72,13 @@ try {
   LogErr "[hera-stdio] HERA_BLENDER_PORT=$env:HERA_BLENDER_PORT"
 
   # IMPORTANT: stdio server must own stdout (JSON-RPC only)
-  python -m hera_mcp.server.stdio
+  $python = if (Test-Path (Join-Path $Root ".venv\Scripts\python.exe")) {
+    (Resolve-Path (Join-Path $Root ".venv\Scripts\python.exe")).Path
+  } else {
+    "python"
+  }
+  LogErr "[hera-stdio] python=$python"
+  & $python -m hera_mcp.server.stdio
 }
 finally {
   if ($p -and -not $p.HasExited) {
