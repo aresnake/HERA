@@ -24,6 +24,8 @@ def _start_socket():
 
 def start():
     print("[HERA] Starting MCP socket server inside Blender UI...")
+    from hera_mcp.tools import blender_ui_impl
+    blender_ui_impl.init_main_thread()
     t = threading.Thread(target=_start_socket, daemon=True)
     t.start()
 

@@ -17,6 +17,9 @@ if str(HERA_SRC) not in sys.path:
     sys.path.insert(0, str(HERA_SRC))
     print(f"[HERA] Added to sys.path: {HERA_SRC}")
 
+from hera_mcp.tools import blender_ui_impl
+blender_ui_impl.init_main_thread()
+
 def start_mcp():
     try:
         import hera_mcp.server.stdio as stdio

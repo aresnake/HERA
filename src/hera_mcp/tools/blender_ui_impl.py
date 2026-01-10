@@ -2,10 +2,24 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional, Sequence
 
+import os
+
+import queue
+import threading
+
 import bpy
 import bmesh
 
 JSON = Dict[str, Any]
+
+_JOB_QUEUE: "queue.Queue[_Job]" = queue.Queue()
+_SCHEDULER_READY = False
+_SCHEDULER_LOCK = threading.Lock()
+_DEFAULT_TIMEOUT_S = 30.0
+try:
+    _MAIN_THREAD_TIMEOUT_S = float(os.environ.get("HERA_BLENDER_TIMEOUT", _DEFAULT_TIMEOUT_S))
+except Exception:
+    _MAIN_THREAD_TIMEOUT_S = _DEFAULT_TIMEOUT_S
 
 
 class ToolError(Exception):
@@ -20,6 +34,60 @@ class ToolError(Exception):
         if self.details is not None:
             payload["details"] = self.details
         return {"ok": False, "error": payload}
+
+
+class _Job:
+    __slots__ = ("tool", "args", "done", "result")
+
+    def __init__(self, tool: str, args: JSON):
+        self.tool = tool
+        self.args = args
+        self.done = threading.Event()
+        self.result: Optional[JSON] = None
+
+
+def _execute_tool(tool: str, args: JSON) -> JSON:
+    try:
+        out = _dispatch_tool(tool, args)
+        return {"ok": True, "result": out}
+    except ToolError as exc:
+        return exc.to_error()
+    except Exception as exc:
+        return {
+            "ok": False,
+            "error": {"code": "internal_error", "message": str(exc), "type": type(exc).__name__},
+        }
+
+
+def _drain_queue() -> float:
+    while True:
+        try:
+            job = _JOB_QUEUE.get_nowait()
+        except queue.Empty:
+            break
+        job.result = _execute_tool(job.tool, job.args)
+        job.done.set()
+    return 0.1
+
+
+def init_main_thread() -> bool:
+    global _SCHEDULER_READY
+    if threading.current_thread() is not threading.main_thread():
+        return False
+    with _SCHEDULER_LOCK:
+        if _SCHEDULER_READY:
+            return True
+        bpy.app.timers.register(_drain_queue, first_interval=0.0, persistent=True)
+        _SCHEDULER_READY = True
+    return True
+
+
+def _ensure_scheduler() -> bool:
+    if _SCHEDULER_READY:
+        return True
+    if threading.current_thread() is threading.main_thread():
+        return init_main_thread()
+    return False
 
 
 def _blender_version() -> str:
@@ -467,10 +535,22 @@ def _dispatch_tool(name: str, args: JSON) -> JSON:
 
 
 def call(tool: str, args: JSON) -> JSON:
-    try:
-        out = _dispatch_tool(tool, args)
-        return {"ok": True, "result": out}
-    except ToolError as exc:
-        return exc.to_error()
-    except Exception as exc:
-        return {"ok": False, "error": {"message": str(exc), "type": type(exc).__name__}}
+    if threading.current_thread() is threading.main_thread():
+        return _execute_tool(tool, args)
+
+    if not _ensure_scheduler():
+        if threading.current_thread() is threading.main_thread():
+            _ensure_scheduler()
+    return {
+        "ok": False,
+        "error": {
+            "code": "blender_not_ready",
+            "message": "Blender main-thread scheduler is not ready",
+        },
+    }
+
+    job = _Job(tool, args)
+    _JOB_QUEUE.put(job)
+    if not job.done.wait(_MAIN_THREAD_TIMEOUT_S):
+        return {"ok": False, "error": {"code": "timeout", "message": "Timed out waiting for Blender main thread"}}
+    return job.result or {"ok": False, "error": {"code": "internal_error", "message": "No result from job"}}

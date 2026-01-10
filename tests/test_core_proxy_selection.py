@@ -19,3 +19,16 @@ def test_call_proxy_uses_blender_client_when_not_in_blender(monkeypatch):
     assert calls["wait"] == 1
     assert calls["call"] == 1
     assert res["ok"] is True
+
+
+def test_tools_call_unknown_tool_returns_error():
+    res = core.handle({"type": "tools/call", "name": "hera.unknown", "args": {}})
+    assert res["ok"] is False
+    assert res["error"]["code"] == "unknown_tool"
+
+
+def test_tools_call_forced_error_normalized():
+    res = core.handle({"type": "tools/call", "name": "hera.fail", "args": {}})
+    assert res["ok"] is False
+    assert res["error"]["code"] == "forced_error"
+    assert "message" in res["error"]
