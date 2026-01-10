@@ -1,10 +1,13 @@
-# Normalize line endings, keep working tree reasonable on Windows
+# Text files: normalize to LF in repo
 * text=auto eol=lf
 
+# Keep Windows batch files as CRLF
+*.bat text eol=crlf
+
+# Force LF for scripts
 *.ps1 text eol=lf
+*.js  text eol=lf
 *.py  text eol=lf
-*.md  text eol=lf
 *.json text eol=lf
-*.toml text eol=lf
 *.yml text eol=lf
 *.yaml text eol=lf
