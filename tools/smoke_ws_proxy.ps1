@@ -9,10 +9,8 @@ function Invoke-Once([string]$jsonLine) {
   $out = $jsonLine | node .\tools\mcp_ws_stdio_server.js --once
   if (-not $out) { throw "No output from ws proxy." }
 
-  # print raw
   $out | Write-Output
 
-  # validate json + ok flag
   $obj = $out | ConvertFrom-Json
   if ($null -eq $obj.ok) { throw "Response missing .ok" }
   if (-not $obj.ok) {
@@ -34,5 +32,21 @@ Invoke-Once '{"type":"tools/call","name":"hera.blender.object.move","arguments":
 
 Write-Host "[smoke] get_location"
 Invoke-Once '{"type":"tools/call","name":"hera.blender.object.get_location","arguments":{"name":"Cube"}}' | Out-Null
+
+Write-Host "[smoke] batch"
+$batch = @{
+  type="tools/call"
+  name="hera.blender.batch"
+  arguments=@{
+    steps=@(
+      @{ tool="hera.blender.object.move"; args=@{ name="Cube"; location=@(0,0,0) } }
+      @{ tool="hera.blender.object.move"; args=@{ name="Cube"; location=@(1,1,0) } }
+      @{ tool="hera.blender.object.get_location"; args=@{ name="Cube" } }
+    )
+    continue_on_error=$false
+  }
+} | ConvertTo-Json -Depth 10 -Compress
+
+Invoke-Once $batch | Out-Null
 
 Write-Host "[smoke] OK"
