@@ -11,6 +11,7 @@ if (!url) {
 
 const args = process.argv.slice(2);
 const pingMode = args.includes("--ping");
+const onceMode = args.includes("--once");
 
 let shuttingDown = false;
 let ws = null;
@@ -222,6 +223,71 @@ async function runPing() {
   });
 }
 
+
+async function runOnce() {
+  const socket = await connectWithBackoff();
+
+  return new Promise((resolve, reject) => {
+    let buffer = "";
+
+    const onStdin = (chunk) => {
+      buffer += chunk.toString("utf8");
+      const parts = buffer.split(/\r?\n/);
+      buffer = parts.pop() ?? "";
+
+      // take the first complete line only
+      if (parts.length > 0) {
+        cleanupStdin();
+        const payload = normalizeOutbound(parts[0]);
+        if (!payload) {
+          resolve(); // normalizeOutbound already printed an error
+          try { socket.close(); } catch {}
+          return;
+        }
+
+        const onMessage = (event) => {
+          const data = typeof event.data === "string" ? event.data : event.data.toString();
+          process.stdout.write(data);
+          if (!data.endsWith("\n")) process.stdout.write("\n");
+          cleanupSocket();
+          resolve();
+        };
+
+        const onClose = () => {
+          cleanupSocket();
+          reject(new Error("WebSocket closed before response."));
+        };
+
+        const onError = (err) => {
+          cleanupSocket();
+          reject(err);
+        };
+
+        function cleanupSocket() {
+          socket.removeEventListener("message", onMessage);
+          socket.removeEventListener("close", onClose);
+          socket.removeEventListener("error", onError);
+          try { socket.close(); } catch {}
+        }
+
+        socket.addEventListener("message", onMessage);
+        socket.addEventListener("close", onClose);
+        socket.addEventListener("error", onError);
+
+        socket.send(payload);
+      }
+    };
+
+    const cleanupStdin = () => {
+      process.stdin.removeListener("data", onStdin);
+    };
+
+    process.stdin.on("data", onStdin);
+    process.stdin.resume();
+  });
+}
+
+
 async function pumpStdio() {
   process.stdin.on("error", (err) => {
     logError(`stdin error: ${err && err.message ? err.message : err}`);
@@ -279,6 +345,12 @@ process.on("SIGTERM", shutdown);
 (async () => {
   try {
     if (pingMode) {
+      await runPing();
+      process.exit(0);
+    } else if (onceMode) {
+      await runOnce();
+      process.exit(0);
+    } else {
       await runPing();
       process.exit(0);
     } else {
