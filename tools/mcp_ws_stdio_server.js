@@ -351,9 +351,6 @@ process.on("SIGTERM", shutdown);
       await runOnce();
       process.exit(0);
     } else {
-      await runPing();
-      process.exit(0);
-    } else {
       await pumpStdio();
     }
   } catch (err) {
