@@ -14,6 +14,7 @@ JSON = Dict[str, Any]
 
 _JOB_QUEUE: "queue.Queue[_Job]" = queue.Queue()
 _SCHEDULER_READY = False
+_SCHEDULER_REGISTERED = False
 _SCHEDULER_LOCK = threading.Lock()
 _DEFAULT_TIMEOUT_S = 30.0
 try:
@@ -60,6 +61,9 @@ def _execute_tool(tool: str, args: JSON) -> JSON:
 
 
 def _drain_queue() -> float:
+    global _SCHEDULER_READY
+    if not _SCHEDULER_READY:
+        _SCHEDULER_READY = True
     while True:
         try:
             job = _JOB_QUEUE.get_nowait()
@@ -71,19 +75,19 @@ def _drain_queue() -> float:
 
 
 def init_main_thread() -> bool:
-    global _SCHEDULER_READY
+    global _SCHEDULER_REGISTERED
     if threading.current_thread() is not threading.main_thread():
         return False
     with _SCHEDULER_LOCK:
-        if _SCHEDULER_READY:
+        if _SCHEDULER_REGISTERED:
             return True
         bpy.app.timers.register(_drain_queue, first_interval=0.0, persistent=True)
-        _SCHEDULER_READY = True
+        _SCHEDULER_REGISTERED = True
     return True
 
 
 def _ensure_scheduler() -> bool:
-    if _SCHEDULER_READY:
+    if _SCHEDULER_READY or _SCHEDULER_REGISTERED:
         return True
     if threading.current_thread() is threading.main_thread():
         return init_main_thread()
@@ -538,16 +542,7 @@ def call(tool: str, args: JSON) -> JSON:
     if threading.current_thread() is threading.main_thread():
         return _execute_tool(tool, args)
 
-    if not _ensure_scheduler():
-        if threading.current_thread() is threading.main_thread():
-            _ensure_scheduler()
-    return {
-        "ok": False,
-        "error": {
-            "code": "blender_not_ready",
-            "message": "Blender main-thread scheduler is not ready",
-        },
-    }
+    _ensure_scheduler()
 
     job = _Job(tool, args)
     _JOB_QUEUE.put(job)
