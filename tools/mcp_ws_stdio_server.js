@@ -129,6 +129,11 @@ function normalizeOutbound(line) {
 
   // Already in server envelope form
   if (typeof obj.type === "string" && obj.type.length) {
+    // Compatibility: some servers expect "args" instead of "arguments" for tools/call
+    if (obj.type === "tools/call" && obj && typeof obj === "object") {
+      if (obj.arguments && typeof obj.arguments === "object" && !obj.args) obj.args = obj.arguments;
+      if (obj.args && typeof obj.args === "object" && !obj.arguments) obj.arguments = obj.args;
+    }
     return JSON.stringify(obj);
   }
 
@@ -143,9 +148,12 @@ function normalizeOutbound(line) {
     }
 
     if (method === "tools/call") {
-      // Forward as typed envelope for the current WS server contract
+      // Forward as typed envelope; keep both "arguments" and "args" for compatibility
       // Expected params commonly: { name: "tool.name", arguments: {...} }
-      return JSON.stringify({ type: "tools/call", ...params });
+      const out = { type: "tools/call", ...params };
+      if (out.arguments && typeof out.arguments === "object" && !out.args) out.args = out.arguments;
+      if (out.args && typeof out.args === "object" && !out.arguments) out.arguments = out.args;
+      return JSON.stringify(out);
     }
 
     process.stdout.write(
